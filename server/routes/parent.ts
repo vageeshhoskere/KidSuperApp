@@ -22,7 +22,7 @@ const AuditQuery = z.object({
   limit: z.coerce.number().int().min(1).max(1000).optional(), offset: z.coerce.number().int().min(0).optional(),
 });
 const MASK = "***";
-const PUBLIC = new Set(["/api/parent/setup", "/api/parent/login"]);
+const PUBLIC = new Set(["/api/parent/setup", "/api/parent/login", "/api/parent/status"]);
 
 /** Only validation errors (zod field paths, our own SettingsError text) become a 400; anything else stays a 500. */
 const asBadRequest = (fn: () => void) => {
@@ -46,6 +46,15 @@ export function parentRoutes(app: FastifyInstance, ctx: Ctx) {
     if (PUBLIC.has(req.routeOptions.url ?? "")) return; // the matched route pattern, not the raw URL
     if (!checkSession(req.cookies.ps, ctx.now())) throw new HttpError(401, "login required");
   });
+
+  // public: the page needs it before login to choose between wizard and PIN screen; leaks no settings
+  app.get("/api/parent/status", async () => {
+    const g = getGlobal(db);
+    return { pinSet: g.pinHash !== null, setupComplete: g.setupComplete };
+  });
+
+  app.get("/api/parent/children", async () =>
+    (db.prepare("SELECT id, name, avatar, age FROM children ORDER BY id").all() as { id: number; name: string; avatar: string; age: number }[]));
 
   app.post("/api/parent/setup", async (req, reply) => {
     const b = parse(SetupBody, req.body);

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getGlobal, isSetUp, logout } from "./api";
+import { getGlobal, getStatus, logout } from "./api";
 import Login from "./Login";
 import SetupWizard from "./SetupWizard";
 import Settings from "./Settings";
@@ -17,7 +17,7 @@ export default function ParentApp() {
   const lock = useCallback(() => { setView("login"); }, []);
   const route = useCallback(async (loggedIn: boolean) => {
     try {
-      if (!loggedIn) return setView((await isSetUp()) ? "login" : "setup");
+      if (!loggedIn) return setView((await getStatus()).pinSet ? "login" : "setup");
       setView((await getGlobal()).setupComplete ? "main" : "resume");
     } catch { setView("login"); }
   }, []);

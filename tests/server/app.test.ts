@@ -79,7 +79,7 @@ describe("parent auth", () => {
     const routes: [string, string][] = [
       ["POST", "/api/parent/logout"], ["GET", "/api/parent/settings/global"], ["PUT", "/api/parent/settings/global"],
       ["GET", "/api/parent/settings/child/1"], ["PUT", "/api/parent/settings/child/1"], ["PUT", "/api/parent/keys/openai"],
-      ["GET", "/api/parent/keys"], ["POST", "/api/parent/keys/openai/test"], ["POST", "/api/parent/children"],
+      ["GET", "/api/parent/keys"], ["POST", "/api/parent/keys/openai/test"], ["POST", "/api/parent/children"], ["GET", "/api/parent/children"],
       ["GET", "/api/parent/audit"], ["GET", "/api/parent/audit/x"], ["GET", "/api/parent/audit.csv"],
       ["GET", "/api/parent/events"], ["GET", "/api/parent/held"], ["POST", "/api/parent/held/x/approve"],
       ["POST", "/api/parent/held/x/picture"], ["POST", "/api/parent/held/x/reject"],
@@ -90,6 +90,25 @@ describe("parent auth", () => {
       const bad = await app.inject({ method: method as "GET", url, headers: { cookie: "ps=nope" } });
       expect(bad.statusCode, `${method} ${url} bad cookie`).toBe(401);
     }
+  });
+
+  it("status is public, reports setup progress and nothing else", async () => {
+    const { app } = make();
+    const get = async () => (await app.inject({ method: "GET", url: "/api/parent/status" })).json();
+    expect(await get()).toEqual({ pinSet: false, setupComplete: false });
+    await setup(app, false);
+    expect(await get()).toEqual({ pinSet: true, setupComplete: false });
+    const { app: app2 } = make();
+    await setup(app2);
+    expect((await app2.inject({ method: "GET", url: "/api/parent/status" })).json()).toEqual({ pinSet: true, setupComplete: true });
+  });
+
+  it("GET children needs a session and lists the created child", async () => {
+    const { app } = make();
+    const { headers, childId } = await setup(app);
+    expect((await app.inject({ method: "GET", url: "/api/parent/children" })).statusCode).toBe(401);
+    const r = await app.inject({ method: "GET", url: "/api/parent/children", headers });
+    expect(r.json()).toEqual([{ id: childId, name: "Sam", avatar: "fox", age: 7 }]);
   });
 
   it("setup is rejected once a PIN exists; login and logout work", async () => {
