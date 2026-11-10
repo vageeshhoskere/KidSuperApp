@@ -16,7 +16,7 @@ export type AuditRequest = {
 export type AuditEventType = "settings_change" | "pin_success" | "pin_fail" | "hold_decision" | "purge";
 export type AuditWriter = {
   logRequest(r: AuditRequest): void;
-  logEvent(type: AuditEventType, detail: unknown, relatedRequestId?: string): void;
+  logEvent(type: AuditEventType, detail: unknown, relatedRequestId?: string, now?: Date): void;
 };
 
 const J = (v: unknown) => (v === null || v === undefined ? null : JSON.stringify(v));
@@ -35,8 +35,8 @@ export function makeAuditWriter(db: Db): AuditWriter {
         ...r, layer1: J(r.layer1), layer2: J(r.layer2), layer3: J(r.layer3), builder: J(r.builder), checker: J(r.checker),
         outputText: J(r.outputText), pictureCheck: J(r.pictureCheck), raw: J(r.raw), scene: J(r.scene),
       }),
-    logEvent: (type, detail, related) =>
-      void insEvt.run(new Date().toISOString(), type, related ?? null, JSON.stringify(detail ?? null)),
+    logEvent: (type, detail, related, now) =>
+      void insEvt.run((now ?? new Date()).toISOString(), type, related ?? null, JSON.stringify(detail ?? null)),
   };
 }
 
