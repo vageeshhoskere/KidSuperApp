@@ -4,7 +4,7 @@ import { createChild, getChild, updateChild, updateGlobal, type ChildSettings } 
 import { countBuildsSince, getRequest, listEvents, listHeld, listRequests, makeAuditWriter, type AuditRequest, type AuditWriter } from "../../server/audit";
 import { makeFakeProvider, type FakeProvider } from "../../server/providers/fake";
 import { ProviderError, type ProviderId } from "../../server/providers/types";
-import { __resetPipelineState, approveHeld, BUILDER_SYSTEM_PROMPT, finishPictureCheck, rejectHeld, startBuild, type Deps } from "../../server/pipeline";
+import { __resetPipelineState, approveHeld, BUILDER_SYSTEM_PROMPT, finishPictureCheck, rejectHeld, startBuild, testBuild, TEST_PROMPT, type Deps } from "../../server/pipeline";
 import { makeNotify } from "../../server/notify";
 import { COPY } from "../../shared/copy";
 import type { BuildResult } from "../../shared/api";
@@ -506,5 +506,43 @@ describe("final review #5: builder timeout and size", () => {
   });
   it("builder prompt asks for 10 to 40 blocks", () => {
     expect(BUILDER_SYSTEM_PROMPT).toMatch(/10 to 40 blocks/);
+  });
+});
+
+describe("testBuild (final review #7)", () => {
+  it("runs the fixed safe prompt with source test and reports the title", async () => {
+    const { db, d, childId, builder } = setup({ child: { pictureCheck: true, flagHandling: "hold", buildsPerDay: 1 } });
+    expect(TEST_PROMPT).toBe("a small red house");
+    expect(await testBuild(d, childId)).toEqual({ ok: true, stage: null, status: "shown", title: "Red Tower" });
+    expect(builder.last.generateJson?.data).toBe("Request: a small red house");
+    expect(rows(db)[0]).toMatchObject({ source: "test", outcome: "shown", inputText: TEST_PROMPT });
+    expect(creations(db)).toHaveLength(0);
+    expect((await startBuild(d, input(childId))).status).toBe("needs_picture"); // child's own settings and limit untouched
+  });
+
+  it("works before setup is complete and outside the child's hours", async () => {
+    const { db, d, childId } = setup();
+    updateGlobal(db, { setupComplete: false }, makeAuditWriter(db));
+    d.now = () => new Date(2026, 10, 10, 23, 59, 30);
+    expect((await testBuild(d, childId)).ok).toBe(true);
+  });
+
+  it.each([
+    ["moderation", { scores: { violence: 0.9 } }],
+    ["moderation", { modFail: "timeout" }],
+    ["checker", { verdicts: ["unsure"] }],
+    ["checker", { verdicts: ["timeout"] }],
+    ["builder", { builderFail: "malformed" }],
+    ["builder", { builderFail: "timeout" }],
+    ["output-check", { verdicts: ["safe", "unsafe"] }],
+  ] as [string, Opts][])("names the failing stage %s", async (stage, o) => {
+    const { d, childId } = setup(o);
+    expect(await testBuild(d, childId)).toMatchObject({ ok: false, stage });
+  });
+
+  it("a missing provider is a setup failure", async () => {
+    const { d, childId } = setup();
+    d.registry = { get: () => null };
+    expect(await testBuild(d, childId)).toEqual({ ok: false, stage: "setup", status: "error" });
   });
 });

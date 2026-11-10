@@ -98,7 +98,7 @@ describe("parent auth", () => {
       ["GET", "/api/parent/keys"], ["POST", "/api/parent/keys/openai/test"], ["POST", "/api/parent/children"], ["GET", "/api/parent/children"],
       ["GET", "/api/parent/audit"], ["GET", "/api/parent/audit/x"], ["GET", "/api/parent/audit.csv"],
       ["GET", "/api/parent/events"], ["GET", "/api/parent/held"], ["POST", "/api/parent/held/x/approve"],
-      ["POST", "/api/parent/held/x/picture"], ["POST", "/api/parent/held/x/reject"],
+      ["POST", "/api/parent/held/x/picture"], ["POST", "/api/parent/held/x/reject"], ["POST", "/api/parent/test-build"],
     ];
     for (const [method, url] of routes) {
       const r = await app.inject({ method: method as "GET", url, payload: method === "GET" ? undefined : {} });
@@ -501,5 +501,32 @@ describe("final review #6: cloud STT transcripts pass Layers 2 and 3", () => {
     expect(ev[0].detail).toEqual({ stage: "pii", text: "call me on [phone]" });
     expect(JSON.stringify(ev)).not.toContain("555");
     expect(h.mod.last.moderate).toBeUndefined(); // never sent to a provider
+  });
+});
+
+describe("final review #7: POST /api/parent/test-build", () => {
+  it("runs a test build for the first child before setup is finished", async () => {
+    const { app } = make();
+    const { headers } = await setup(app, false);
+    await put(app, headers, "/api/parent/settings/global", {
+      builder: { provider: "anthropic", model: "b" }, checker: { provider: "google", model: "c" }, moderation: "openai",
+    }, 200);
+    const r = await app.inject({ method: "POST", url: "/api/parent/test-build", headers });
+    expect(r.json()).toEqual({ ok: true, stage: null, status: "shown", title: "Red Tower" });
+    const list = (await app.inject({ method: "GET", url: "/api/parent/audit", headers })).json();
+    expect(list[0]).toMatchObject({ source: "test", inputText: "a small red house" });
+  });
+
+  it("reports the failing stage", async () => {
+    const { app } = make({ verdicts: ["unsafe"] });
+    const { headers } = await setup(app);
+    expect((await app.inject({ method: "POST", url: "/api/parent/test-build", headers })).json()).toMatchObject({ ok: false, stage: "checker" });
+  });
+
+  it("accepts no body fields (source and settingsOverride are code-only)", async () => {
+    const { app } = make();
+    const { headers } = await setup(app);
+    for (const payload of [{ source: "child" }, { settingsOverride: { pictureCheck: true } }, { text: "x" }])
+      expect((await app.inject({ method: "POST", url: "/api/parent/test-build", headers, payload })).statusCode).toBe(400);
   });
 });

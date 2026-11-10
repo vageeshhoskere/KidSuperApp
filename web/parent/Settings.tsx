@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { getGlobal, listChildren, putChild, putGlobal, type Child, type GlobalView } from "./api";
 import Providers, { type Models } from "./Providers";
 import { ModelPick } from "./SetupWizard";
+import TestBuild from "./TestBuild";
 import type { ChildSettings } from "../../server/settings";
 
 const lines = (s: string) => s.split("\n").map((x) => x.trim()).filter(Boolean);
@@ -81,6 +82,8 @@ function GlobalForm({ g, onSaved }: { g: GlobalView; onSaved: () => void }) {
       <label>SMTP port <input type="number" value={smtp.port} onChange={(e) => setSmtp("port", Number(e.target.value))} /></label>
       <button onClick={() => void save()}>Save</button>
       {msg && <p role="status" className={msg === "Saved." ? "" : "err"}>{msg}</p>}
+      <p>Test build uses the saved settings: save first.</p>
+      <TestBuild />
     </fieldset>
   );
 }

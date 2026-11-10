@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { openDb } from "../../server/db";
 import { makeAuditWriter, listEvents } from "../../server/audit";
 import { updateGlobal } from "../../server/settings";
-import { hashPin, verifyPin, isValidPin, isLockedOut, login, checkSession, logout, __resetSessions } from "../../server/auth";
+import { hashPin, verifyPin, isValidPin, isLockedOut, login, checkSession, logout, __resetSessions, resetPin } from "../../server/auth";
+import { getGlobal } from "../../server/settings";
 
 const T0 = new Date("2026-11-10T10:00:00.000Z");
 const at = (ms: number) => new Date(T0.getTime() + ms);
@@ -94,5 +95,27 @@ describe("sessions", () => {
     expect(checkSession("nope", T0)).toBe(false);
     logout(t);
     expect(checkSession(t, T0)).toBe(false);
+  });
+});
+
+describe("resetPin (final review #8)", () => {
+  it("sets a new PIN through updateGlobal, audited and masked", () => {
+    const { db, audit } = setup();
+    resetPin(db, audit, "654321");
+    expect(login(db, audit, "654321", T0).ok).toBe(true);
+    expect(login(db, audit, "123456", T0).ok).toBe(false);
+    const ev = listEvents(db, { type: "settings_change" }).filter((e) => (e.detail as { key: string }).key === "pinHash");
+    expect(ev.at(-1)!.detail).toEqual({ key: "pinHash", old: "***", new: "***" });
+  });
+  it.each(["12345", "1234567", "abcdef", ""])("rejects %j and never clears the PIN", (bad) => {
+    const { db, audit } = setup();
+    const before = getGlobal(db).pinHash;
+    expect(() => resetPin(db, audit, bad)).toThrow("PIN must be 6 digits");
+    expect(getGlobal(db).pinHash).toBe(before);
+  });
+  it("refuses before first-run setup (the wizard must create the PIN and child)", () => {
+    const { db, audit } = setup(null);
+    expect(() => resetPin(db, audit, "654321")).toThrow("No PIN is set yet");
+    expect(getGlobal(db).pinHash).toBeNull();
   });
 });

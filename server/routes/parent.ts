@@ -6,7 +6,7 @@ import { getRequest, listEvents, listHeld, listRequests, toCsv } from "../audit"
 import { checkSession, hashPin, isValidPin, login, logout } from "../auth";
 import { maskKey, readKeys, writeKey } from "../keys";
 import { createChild, getChild, getGlobal, SettingsError, updateChild, updateGlobal, type GlobalSettings } from "../settings";
-import { approveHeld, finishPictureCheck, rejectHeld } from "../pipeline";
+import { approveHeld, finishPictureCheck, rejectHeld, testBuild } from "../pipeline";
 import { decodePng } from "./child";
 import type { BuildResult } from "../../shared/api";
 
@@ -163,6 +163,14 @@ export function parentRoutes(app: FastifyInstance, ctx: Ctx) {
       req.log.warn({ provider, err: e }, "key test failed");
       return { ok: false, models: [] };
     }
+  });
+
+  // R26: no body fields: the prompt, source and settings override are fixed in code
+  app.post("/api/parent/test-build", async (req) => {
+    parse(z.strictObject({}).optional(), req.body);
+    const first = db.prepare("SELECT id FROM children ORDER BY id LIMIT 1").get() as { id: number } | undefined;
+    if (!first) throw new HttpError(400, "add a child first");
+    return testBuild(deps, first.id);
   });
 
   app.get("/api/parent/audit", async (req) => listRequests(db, parse(AuditQuery, req.query)));

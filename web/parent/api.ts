@@ -26,6 +26,8 @@ export const logout = () => send("POST", "/api/parent/logout");
 export const getKeys = () => get<Record<string, string | null>>("/api/parent/keys");
 export const putKey = (p: string, key: string | null) => send("PUT", `/api/parent/keys/${p}`, { key });
 export const testKey = (p: string) => send<{ ok: boolean; models: string[] }>("POST", `/api/parent/keys/${p}/test`);
+export type TestBuildResult = { ok: boolean; stage: string | null; status: string; title?: string };
+export const testBuild = () => send<TestBuildResult>("POST", "/api/parent/test-build");
 export const listChildren = async (): Promise<Child[]> => {
   const kids = await get<Omit<Child, "settings">[]>("/api/parent/children");
   return Promise.all(kids.map((k) => get<Child>(`/api/parent/settings/child/${k.id}`)));

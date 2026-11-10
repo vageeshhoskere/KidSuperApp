@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Db } from "./db";
-import { countBuildsSince, listHeld, type AuditRequest, type AuditWriter, type LayerResult } from "./audit";
+import { countBuildsSince, getRequest, listHeld, type AuditRequest, type AuditWriter, type LayerResult } from "./audit";
 import { checkGates, startOfLocalDay } from "./gates";
 import { getChild, getGlobal, type ChildSettings, type GlobalSettings, type ModelChoice } from "./settings";
 import { ProviderError, type Provider, type Registry } from "./providers/types";
@@ -252,7 +252,8 @@ async function runStart(d: Deps, i: BuildInput, text: string, row: AuditRequest)
   row.builder = g.builder;
   row.checker = g.checker ?? g.builder;
 
-  const gate = checkGates({ global: g, child: settings, mode: i.mode, buildsToday, now });
+  // a parent Test build checks the providers, not the child's gates (it also runs before setup is finished)
+  const gate = i.source === "test" ? { ok: true as const } : checkGates({ global: g, child: settings, mode: i.mode, buildsToday, now });
   if (!gate.ok) return log(d, row, "closed", { status: "closed", message: gate.reason === "setup" ? COPY.setup : COPY.closed });
   if (text.length > MAX_INPUT) return log(d, row, "redirected", redirect(d, row, COPY.tooLong));
   if (findPii(text).found) return log(d, row, "redirected", redirect(d, row, COPY.pii));
@@ -286,6 +287,32 @@ export async function startBuild(d: Deps, i: BuildInput): Promise<BuildResult> {
   } finally {
     if (res?.status !== "needs_picture") busy.delete(i.childId); // otherwise released at picture-check finalisation
   }
+}
+
+export const TEST_PROMPT = "a small red house";
+export type TestBuildResult = {
+  ok: boolean; stage: "setup" | "moderation" | "checker" | "builder" | "output-check" | null; status: BuildResult["status"]; title?: string;
+};
+
+/** The step a failed build stopped at, read from its audit row. */
+function failedStage(r: AuditRequest | null): NonNullable<TestBuildResult["stage"]> {
+  if (!r) return "setup";
+  if (r.layer2.result === "fail") return "moderation";
+  if (r.layer3.result === "fail") return "checker";
+  if (r.layer3.result === "pass" && !r.outputText) return "builder";
+  if (r.outputText) return "output-check";
+  return "setup"; // e.g. a provider missing from the registry: nothing ran
+}
+
+/** R26: one fixed safe prompt through the chosen providers, audited with source "test"; never in the gallery. */
+export async function testBuild(d: Deps, childId: number): Promise<TestBuildResult> {
+  const res = await startBuild(d, {
+    childId, mode: "typed", text: TEST_PROMPT, source: "test",
+    settingsOverride: { pictureCheck: false, hoursStart: "00:00", hoursEnd: "23:59", flagHandling: "redirect" },
+  });
+  if (res.status === "shown") return { ok: true, stage: null, status: res.status, title: res.scene.title };
+  const id = "requestId" in res ? res.requestId : undefined;
+  return { ok: false, stage: failedStage(id ? getRequest(d.db, id) : null), status: res.status };
 }
 
 export async function finishPictureCheck(d: Deps, requestId: string, png: Buffer): Promise<BuildResult> {

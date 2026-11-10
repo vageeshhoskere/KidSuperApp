@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import type { Db } from "./db";
 import { listEvents, type AuditWriter } from "./audit";
-import { getGlobal } from "./settings";
+import { getGlobal, updateGlobal } from "./settings";
 
 const SCRYPT = { N: 16384, r: 8, p: 1 };
 const LOCK_FAILS = 5;
@@ -13,6 +13,13 @@ export const isValidPin = (pin: string): boolean => /^\d{6}$/.test(pin);
 export function hashPin(pin: string): string {
   const salt = crypto.randomBytes(16);
   return `${salt.toString("hex")}:${crypto.scryptSync(pin, salt, 64, SCRYPT).toString("hex")}`;
+}
+
+/** Sets a new PIN (the `npm run reset-pin` CLI). Audited and masked by updateGlobal; an invalid PIN changes nothing. */
+export function resetPin(db: Db, audit: AuditWriter, pin: string): void {
+  if (!isValidPin(pin)) throw new Error("PIN must be 6 digits");
+  if (getGlobal(db).pinHash === null) throw new Error("No PIN is set yet: open /parent and run the setup wizard.");
+  updateGlobal(db, { pinHash: hashPin(pin) }, audit);
 }
 
 export function verifyPin(pin: string, stored: string): boolean {

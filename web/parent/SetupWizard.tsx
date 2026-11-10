@@ -2,6 +2,7 @@ import { useState } from "react";
 import { putGlobal, setup } from "./api";
 import { canFinishWizard, modelChoiceFor, pickProviders, pinsMatch, validatePin } from "./forms";
 import Providers, { PROVIDERS, type Models } from "./Providers";
+import TestBuild from "./TestBuild";
 import type { ModelChoice } from "../../server/settings";
 
 export const AVATARS = ["🐶", "🐱", "🦊", "🐼", "🐸", "🦁", "🐵", "🐧", "🦄", "🐙", "🦖", "🐢"];
@@ -74,6 +75,8 @@ export default function SetupWizard({ resume, onDone }: { resume: boolean; onDon
         <label>Moderation (Layer 2) <select value={moderation} onChange={(e) => setModeration(e.target.value as typeof moderation)}>
           <option value="off">off</option>{(["openai", "google"] as const).map((p) => <option key={p}>{p}</option>)}</select></label>
         {moderation === "off" && <label><input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} /> I understand Layer 2 is off</label>}
+        <TestBuild disabled={!canFinishWizard({ builder, checker, moderation, moderationOffAcknowledged: ack })}
+          save={() => putGlobal({ builder, checker, moderation, moderationOffAcknowledged: ack })} />
         <button disabled={!canFinishWizard({ builder, checker, moderation, moderationOffAcknowledged: ack })} onClick={next}>Next</button>
       </>)}
       {step === 4 && (<>

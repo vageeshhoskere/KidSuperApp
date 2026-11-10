@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getKeys, putKey, testKey } from "./api";
+import { getKeys, getStatus, putKey, testKey } from "./api";
 
 export const PROVIDERS = ["openai", "anthropic", "google"] as const;
 export type Models = Partial<Record<(typeof PROVIDERS)[number], string[]>>;
@@ -9,7 +9,8 @@ export default function Providers({ onModels }: { onModels: (provider: string, m
   const [saved, setSaved] = useState<Record<string, string | null>>({});
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [msg, setMsg] = useState<Record<string, string>>({});
-  useEffect(() => { void getKeys().then(setSaved).catch(() => {}); }, []);
+  const [fake, setFake] = useState(false); // FAKE_PROVIDERS test mode: the server refuses keys
+  useEffect(() => { void getKeys().then(setSaved).catch(() => {}); void getStatus().then((s) => setFake(!!s.fakeProviders)).catch(() => {}); }, []);
   const say = (p: string, m: string) => setMsg((s) => ({ ...s, [p]: m }));
 
   async function test(p: string) {
@@ -24,9 +25,9 @@ export default function Providers({ onModels }: { onModels: (provider: string, m
     <div>
       {PROVIDERS.map((p) => (
         <div key={p} className="field">
-          <strong>{p}</strong> {saved[p] ? <span>saved ({saved[p]})</span> : <span>no key</span>}
-          <input type="password" autoComplete="off" placeholder="paste key (20+ characters)" aria-label={`${p} key`} value={draft[p] ?? ""} onChange={(e) => setDraft((d) => ({ ...d, [p]: e.target.value }))} />
-          <button type="button" disabled={!saved[p] && (draft[p] ?? "").trim().length < 20} onClick={() => void test(p)}>Test</button>
+          <strong>{p}</strong> {fake ? <span>fake provider (no key)</span> : saved[p] ? <span>saved ({saved[p]})</span> : <span>no key</span>}
+          {!fake && <input type="password" autoComplete="off" placeholder="paste key (20+ characters)" aria-label={`${p} key`} value={draft[p] ?? ""} onChange={(e) => setDraft((d) => ({ ...d, [p]: e.target.value }))} />}
+          <button type="button" disabled={!fake && !saved[p] && (draft[p] ?? "").trim().length < 20} onClick={() => void test(p)}>Test</button>
           {msg[p] && <span role="status">{msg[p]}</span>}
         </div>
       ))}

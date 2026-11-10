@@ -12,7 +12,8 @@
     "start": "tsx server/index.ts",
     "test": "vitest run",
     "e2e": "playwright test",
-    "redteam": "tsx scripts/redteam.ts"
+    "redteam": "tsx scripts/redteam.ts",
+    "reset-pin": "tsx scripts/reset-pin.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.8.0",

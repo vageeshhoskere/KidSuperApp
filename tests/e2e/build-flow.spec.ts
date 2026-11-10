@@ -10,13 +10,20 @@ test("parent setup, child build, redirect, audit", async ({ page }) => {
   await page.getByRole("radio").first().click();
   await page.getByLabel("Age").fill("7");
   await page.getByRole("button", { name: "Next" }).click();
-  await page.getByLabel("openai key").fill("sk-dummy-dummy-dummy-dummy-1234");
+  // FAKE_PROVIDERS: the server refuses keys (409), so the page offers Test without one
+  await expect(page.getByLabel("openai key")).toHaveCount(0);
   await page.locator(".field", { hasText: "openai" }).getByRole("button", { name: "Test" }).click();
   await expect(page.getByText("Works: 1 models")).toBeVisible();
   await page.getByRole("button", { name: "Next" }).click();
   await page.getByLabel("Builder provider").selectOption("openai");
   await page.getByLabel("Checker provider").selectOption("openai");
   await page.getByLabel("Moderation (Layer 2)").selectOption("openai");
+  // no model is picked for the parent: Next stays disabled until both are chosen
+  await expect(page.getByRole("button", { name: "Next" })).toBeDisabled();
+  await page.getByLabel("Builder model").selectOption("fake-model");
+  await page.getByLabel("Checker model").selectOption("fake-model");
+  await page.getByRole("button", { name: "Test build" }).click();
+  await expect(page.getByText("Works! It built: Red Tower")).toBeVisible();
   await page.getByRole("button", { name: "Next" }).click();
   await page.getByRole("button", { name: "Finish" }).click();
 
