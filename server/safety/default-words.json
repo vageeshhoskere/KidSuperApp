@@ -3,6 +3,6 @@
   "violence": ["murder", "stab", "shoot", "blood", "gore", "torture", "beat up", "strangle", "massacre", "attack", "behead", "corpse"],
   "adult": ["sex", "porn", "naked", "nude", "boobs", "penis", "vagina", "erotic", "fetish", "strip club"],
   "drugs": ["cocaine", "heroin", "meth", "weed", "marijuana", "lsd", "opium", "vape", "cigarette", "beer", "vodka"],
-  "selfHarm": ["suicide", "kill myself", "hurt myself", "cut myself", "self harm", "hang myself", "die", "end my life"],
-  "insults": ["stupid", "idiot", "dumb", "moron", "loser", "ugly", "shut up", "hate you"]
+  "selfHarm": ["suicide", "kill myself", "hurt myself", "cut myself", "self harm", "hang myself", "die", "end my life", "overdose", "starve myself"],
+  "insults": ["stupid", "idiot", "dumb", "moron", "loser", "ugly", "shut up", "hate you", "jerk", "fatty"]
 }

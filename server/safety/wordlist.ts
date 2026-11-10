@@ -5,31 +5,27 @@ const DEFAULTS: [string, string][] = Object.entries(words as Record<string, stri
   ts.map((t): [string, string] => [cat, t]),
 );
 
-// "g u n" -> "gun": join runs of single characters so short terms still match.
-const joinSingles = (s: string) => s.replace(/(?<![a-z0-9])[a-z0-9]( [a-z0-9])+(?![a-z0-9])/g, (m) => m.replace(/ /g, ""));
+// Term letters with an optional single separator between each, bounded by non-alphanumerics.
+const termRegex = (squashed: string) =>
+  new RegExp(`(?<![a-z0-9])${[...squashed].map((c) => c.replace(/[^a-z0-9]/g, "\\$&")).join(" ?")}(?![a-z0-9])`);
 
 export function checkWords(text: string, extra: string[], allowed: string[]): { pass: boolean; matched: string[]; category?: string } {
-  const n = normalize(text);
-  let spaced = ` ${n.spaced} `;
-  let squashed = n.squashed;
+  let spaced = ` ${normalize(text).spaced} `;
   for (const a of allowed) {
-    const an = normalize(a);
-    if (!an.spaced) continue;
-    spaced = spaced.split(` ${an.spaced} `).join("  ");
-    squashed = squashed.split(an.squashed).join(" ");
+    const as = normalize(a).spaced;
+    if (as) spaced = spaced.split(` ${as} `).join("  ");
   }
-  spaced = ` ${spaced.replace(/ +/g, " ").trim()} `;
-  const joined = ` ${joinSingles(spaced.trim())} `;
+  spaced = spaced.replace(/ +/g, " ").trim();
   const matched: string[] = [];
   let category: string | undefined;
+  let best = 0;
   for (const [cat, term] of [...DEFAULTS, ...extra.map((t): [string, string] => ["parent", t])]) {
-    const t = normalize(term);
-    if (!t.spaced) continue;
-    const hit =
-      spaced.includes(` ${t.spaced} `) || joined.includes(` ${t.spaced} `) || (t.squashed.length >= 4 && squashed.includes(t.squashed));
-    if (hit) {
-      matched.push(term);
-      category ??= cat;
+    const { squashed } = normalize(term);
+    if (!squashed || !termRegex(squashed).test(spaced)) continue;
+    if (!matched.includes(term)) matched.push(term);
+    if (squashed.length > best) {
+      best = squashed.length;
+      category = cat;
     }
   }
   return { pass: matched.length === 0, matched, category };
