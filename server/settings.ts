@@ -6,6 +6,7 @@ export type ModelChoice = { provider: "openai" | "anthropic" | "google"; model: 
 export type ChildSettings = {
   typing: boolean; pictures: boolean; voice: boolean;
   stt: "browser" | "openai" | "google"; tts: boolean; ttsProvider: "browser" | "openai" | "google";
+  sttModel: string; ttsModel: string;
   flagHandling: "redirect" | "notify" | "hold"; pictureCheck: boolean;
   wordAdditions: string[]; allowedPhrases: string[];
   buildsPerDay: number; hoursStart: string; hoursEnd: string;
@@ -19,7 +20,7 @@ export type GlobalSettings = {
 };
 
 export const DEFAULT_CHILD_SETTINGS: ChildSettings = {
-  typing: true, pictures: true, voice: false, stt: "browser", tts: false, ttsProvider: "browser",
+  typing: true, pictures: true, voice: false, stt: "browser", tts: false, ttsProvider: "browser", sttModel: "", ttsModel: "",
   flagHandling: "redirect", pictureCheck: true, wordAdditions: [], allowedPhrases: [],
   buildsPerDay: 30, hoursStart: "08:00", hoursEnd: "19:00",
 };
@@ -45,7 +46,7 @@ const GlobalPatch = z.strictObject({
 
 const ChildPatch = z.strictObject({
   typing: z.boolean(), pictures: z.boolean(), voice: z.boolean(),
-  stt: z.enum(["browser", "openai", "google"]), tts: z.boolean(), ttsProvider: z.enum(["browser", "openai", "google"]),
+  stt: z.enum(["browser", "openai", "google"]), tts: z.boolean(), ttsProvider: z.enum(["browser", "openai", "google"]), sttModel: z.string(), ttsModel: z.string(),
   flagHandling: z.enum(["redirect", "notify", "hold"]), pictureCheck: z.boolean(),
   wordAdditions: z.array(z.string()), allowedPhrases: z.array(z.string()),
   buildsPerDay: z.number().int().min(1).max(500), hoursStart: hhmm, hoursEnd: hhmm,
@@ -111,6 +112,9 @@ export function updateChild(db: Db, childId: number, patch: Partial<ChildSetting
   const child = getChild(db, childId);
   if (!child) throw new Error(`no such child ${childId}`);
   const next = { ...child.settings, ...p };
+  if (next.hoursStart >= next.hoursEnd) throw new Error("hoursStart must be before hoursEnd");
+  if (next.stt !== "browser" && !next.sttModel) throw new Error("sttModel is required for a cloud STT provider");
+  if (next.ttsProvider !== "browser" && !next.ttsModel) throw new Error("ttsModel is required for a cloud TTS provider");
   db.transaction(() => {
     db.prepare("UPDATE children SET settings = ? WHERE id = ?").run(JSON.stringify(next), childId);
     logChanges(audit, child.settings, p, { childId });

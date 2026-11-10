@@ -77,4 +77,23 @@ describe("settings", () => {
     updateGlobal(db, { smtp: null }, audit);
     expect(getGlobal(db).smtp).toBeNull();
   });
+  it("rejects hoursStart >= hoursEnd", () => {
+    const { db, audit } = setup();
+    const id = createChild(db, { name: "K", avatar: "a", age: 7 });
+    expect(() => updateChild(db, id, { hoursStart: "19:00" }, audit)).toThrow();
+    expect(() => updateChild(db, id, { hoursStart: "10:00", hoursEnd: "09:00" }, audit)).toThrow();
+    updateChild(db, id, { hoursStart: "09:00", hoursEnd: "10:00" }, audit);
+    expect(getChild(db, id)!.settings.hoursEnd).toBe("10:00");
+  });
+  it("speech models default to empty and are required for cloud speech", () => {
+    const { db, audit } = setup();
+    const id = createChild(db, { name: "K", avatar: "a", age: 7 });
+    expect(getChild(db, id)!.settings).toMatchObject({ sttModel: "", ttsModel: "" });
+    expect(() => updateChild(db, id, { stt: "openai" }, audit)).toThrow();
+    expect(() => updateChild(db, id, { ttsProvider: "google" }, audit)).toThrow();
+    updateChild(db, id, { stt: "openai", sttModel: "whisper-x", ttsProvider: "google", ttsModel: "tts-x" }, audit);
+    expect(() => updateChild(db, id, { sttModel: "" }, audit)).toThrow();
+    updateChild(db, id, { stt: "browser", sttModel: "" }, audit);
+    expect(getChild(db, id)!.settings).toMatchObject({ stt: "browser", sttModel: "", ttsModel: "tts-x" });
+  });
 });
