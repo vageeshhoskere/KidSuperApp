@@ -3,7 +3,10 @@ import { z } from "zod";
 import { HttpError, MB, parse } from "../http";
 import type { Ctx } from "../app";
 import { getRequest } from "../audit";
-import { DEFAULT_CHILD_SETTINGS } from "../settings";
+import { DEFAULT_CHILD_SETTINGS, getGlobal, type ChildSettings } from "../settings";
+import { checkGates } from "../gates";
+import { findPii } from "../safety/pii";
+import { checkWords } from "../safety/wordlist";
 import { finishPictureCheck, startBuild } from "../pipeline";
 import { PROVIDER_TIMEOUT_MS } from "../safety/layers";
 import { parseScene, SceneSchema } from "../../shared/scene";
@@ -14,7 +17,9 @@ const BuildBody = z.strictObject({
   mode: z.enum(["typed", "voice", "pictures"]), text: z.string(),
   baseScene: z.unknown().optional(), parentRequestId: z.string().optional(),
 });
-const PictureBody = z.strictObject({ png: z.string().regex(/^[A-Za-z0-9+/]*={0,2}$/) });
+const PictureBody = z.strictObject({ png: z.string().min(1).regex(/^[A-Za-z0-9+/]*={0,2}$/) });
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const MAX_INPUT = 300;
 const CreationBody = z.strictObject({
   title: SceneSchema.shape.title, scene: z.unknown(),
   thumbnail: z.string().max(MB).regex(/^data:image\//).nullable(),
@@ -26,6 +31,7 @@ const NumIdParam = z.object({ id: z.coerce.number().int() });
 export function decodePng(body: unknown): Buffer {
   const png = Buffer.from(parse(PictureBody, body).png, "base64");
   if (png.length > 2 * MB) throw new HttpError(400, "picture too large");
+  if (!png.subarray(0, 8).equals(PNG_SIGNATURE)) throw new HttpError(400, "not a PNG");
   return png;
 }
 
@@ -33,8 +39,13 @@ export function childRoutes(app: FastifyInstance, ctx: Ctx) {
   const { db, deps } = ctx;
   const child = () => {
     const c = ctx.currentChild();
-    if (!c) throw new HttpError(403, "not set up");
+    if (!c) throw new HttpError(403, "not set up", { error: "not set up", message: COPY.setup });
     return c;
+  };
+  /** Speech routes honour the allowed hours (setup is checked by child()); mode and limit are not build gates here. */
+  const requireOpen = (s: ChildSettings) => {
+    const g = checkGates({ global: getGlobal(db), child: { ...s, voice: true }, mode: "voice", buildsToday: 0, now: ctx.now() });
+    if (!g.ok) throw new HttpError(403, "closed", { error: "closed", message: g.reason === "setup" ? COPY.setup : COPY.closed });
   };
   const track = (childId: number, r: BuildResult) => {
     if (r.status === "shown") ctx.lastShown.set(childId, r.scene.title);
@@ -76,10 +87,18 @@ export function childRoutes(app: FastifyInstance, ctx: Ctx) {
     a.addContentTypeParser(/^audio\//, { parseAs: "buffer", bodyLimit: 5 * MB }, (_req, body, done) => done(null, body));
     a.post("/api/child/stt", { bodyLimit: 5 * MB }, async (req) => {
       const s = child().settings;
-      if (!s.voice || s.stt === "browser" || !Buffer.isBuffer(req.body)) throw new HttpError(403, "speech input is off");
+      requireOpen(s);
+      if (!s.voice || s.stt === "browser") throw new HttpError(403, "speech input is off");
+      const mime = (req.headers["content-type"] ?? "").split(";")[0].trim().toLowerCase();
+      if (!mime.startsWith("audio/") || !Buffer.isBuffer(req.body)) throw new HttpError(415, "audio expected");
       const p = ctx.registry().get(s.stt);
       if (!p?.transcribe) throw new Error(`stt provider ${s.stt} unavailable`);
-      return { text: await p.transcribe(req.body, req.headers["content-type"]!, PROVIDER_TIMEOUT_MS, s.sttModel) };
+      const text = await p.transcribe(req.body, mime, PROVIDER_TIMEOUT_MS, s.sttModel);
+      // R18: the transcript is provider text shown to the child, so it gets the pre-provider checks
+      if (findPii(text).found) return { text: "", message: COPY.pii };
+      if (!checkWords(text, s.wordAdditions, s.allowedPhrases).pass) return { text: "", message: COPY.oops };
+      if (text.length > MAX_INPUT) return { text: "", message: COPY.tooLong };
+      return { text };
     });
   });
 
@@ -87,6 +106,7 @@ export function childRoutes(app: FastifyInstance, ctx: Ctx) {
     const { text } = parse(z.strictObject({ text: z.string() }), req.body);
     const c = child();
     const s = c.settings;
+    requireOpen(s);
     const title = ctx.lastShown.get(c.id);
     if (!s.tts || s.ttsProvider === "browser" || title === undefined || text !== fill(COPY.here, { title }))
       throw new HttpError(403, "not allowed");

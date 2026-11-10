@@ -19,7 +19,8 @@ const SCENE: Scene = {
   blocks: [{ shape: "cube", color: "red", position: [0, 0, 0], size: [1, 1, 1], rotation: [0, 0, 0] }],
 };
 const v = (verdict: string) => ({ intent: "build a tower", summary: "a red tower", verdict, categories: [], reason: "ok" });
-const PNG64 = Buffer.from("png").toString("base64");
+const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+const PNG64 = PNG.toString("base64");
 
 afterEach(() => {
   __resetSessions();
@@ -31,13 +32,14 @@ function make(o: { verdicts?: string[] } = {}) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "app-test-"));
   const verdicts = [...(o.verdicts ?? [])];
   const mod = makeFakeProvider({ moderate: { violence: 0.01 } });
-  mod.transcribe = async () => "a red tower";
+  const stt = { text: "a red tower", mime: "" };
+  mod.transcribe = async (_a, mime) => { stt.mime = mime; return stt.text; };
   mod.speak = async () => Buffer.from("RIFFxxxxWAVE");
   const checker = makeFakeProvider({ json: () => v(verdicts.shift() ?? "safe") });
   const builder = makeFakeProvider({ json: () => SCENE });
   const providers: Partial<Record<ProviderId, FakeProvider>> = { openai: mod, google: checker, anthropic: builder };
   const app = buildApp({ db, dataDir, registry: { get: (id) => providers[id] ?? null }, now: () => NOW });
-  return { app, db, dataDir, builder };
+  return { app, db, dataDir, builder, stt };
 }
 
 /** First-run setup: PIN + child, providers chosen, setup finished. Returns the session cookie. */
@@ -121,6 +123,39 @@ describe("parent auth", () => {
     expect(g.body).not.toMatch(/[0-9a-f]{32}:/);
     await put(app, headers, "/api/parent/settings/global", { pinHash: "x" }, 400);
   });
+
+  it("setupComplete invariant holds for later patches too", async () => {
+    const { app } = make();
+    const { headers } = await setup(app);
+    await put(app, headers, "/api/parent/settings/global", { moderation: "off" }, 400);
+    await put(app, headers, "/api/parent/settings/global", { builder: null }, 400);
+    await put(app, headers, "/api/parent/settings/global", { moderation: "off", moderationOffAcknowledged: true }, 200);
+  });
+
+  it("setup is atomic: a failed child insert leaves no PIN", async () => {
+    const { app, db } = make();
+    db.exec("DROP TABLE children");
+    const r = await app.inject({ method: "POST", url: "/api/parent/setup", payload: { pin: PIN, child: { name: "S", avatar: "a", age: 7 } } });
+    expect(r.statusCode).toBe(500);
+    expect(r.json()).toEqual({ error: "internal" });
+    const pin = db.prepare("SELECT value FROM settings WHERE key = 'pinHash'").get();
+    expect(pin).toBeUndefined();
+  });
+
+  it("a non-validation failure in a settings write is a 500, not a 400", async () => {
+    const { app, db } = make();
+    const { headers } = await setup(app);
+    db.exec("DROP TABLE audit_events");
+    const r = await put(app, headers, "/api/parent/settings/global", { retentionDays: 30 }, 500);
+    expect(r.json()).toEqual({ error: "internal" });
+  });
+
+  it("unknown routes return 404 {error:'not found'}", async () => {
+    const { app } = make();
+    const r = await app.inject({ method: "GET", url: "/api/nope" });
+    expect(r.statusCode).toBe(404);
+    expect(r.json()).toEqual({ error: "not found" });
+  });
 });
 
 describe("keys", () => {
@@ -136,6 +171,8 @@ describe("keys", () => {
     const ev = await app.inject({ method: "GET", url: "/api/parent/events", headers });
     expect(ev.body).not.toContain(key);
     await put(app, headers, "/api/parent/keys/nope", { key }, 400);
+    await put(app, headers, "/api/parent/keys/google", { key: "short-key-1234" }, 400); // R19: < 20 chars
+    await put(app, headers, "/api/parent/keys/google", { key: null }, 200);
   });
 
   it("key test returns the provider's models", async () => {
@@ -176,6 +213,10 @@ describe("child routes", () => {
     expect(other.statusCode).toBe(403);
     const big = await app.inject({ method: "POST", url: `/api/child/build/${r.requestId}/picture`, payload: { png: Buffer.alloc(2 * 1024 * 1024 + 1).toString("base64") } });
     expect(big.statusCode).toBe(400);
+    const empty = await app.inject({ method: "POST", url: `/api/child/build/${r.requestId}/picture`, payload: { png: "" } });
+    expect(empty.statusCode).toBe(400);
+    const notPng = await app.inject({ method: "POST", url: `/api/child/build/${r.requestId}/picture`, payload: { png: Buffer.from("GIF89a").toString("base64") } });
+    expect(notPng.statusCode).toBe(400);
     const done = await app.inject({ method: "POST", url: `/api/child/build/${r.requestId}/picture`, payload: { png: PNG64 } });
     expect(done.json()).toMatchObject({ status: "shown", scene: SCENE });
   });
@@ -204,13 +245,42 @@ describe("child routes", () => {
     expect(ok.headers["content-type"]).toBe("audio/wav");
   });
 
-  it("stt is 403 unless voice is on with a cloud provider", async () => {
-    const { app } = make();
+  it("stt is 403 unless voice is on with a cloud provider; transcript is filtered", async () => {
+    const h = make();
+    const { app } = h;
     const { headers, childId } = await setup(app);
-    const stt = () => app.inject({ method: "POST", url: "/api/child/stt", headers: { "content-type": "audio/webm" }, payload: Buffer.from("aud") });
+    const stt = (ct = "audio/webm;codecs=opus") => app.inject({ method: "POST", url: "/api/child/stt", headers: { "content-type": ct }, payload: Buffer.from("aud") });
     expect((await stt()).statusCode).toBe(403);
-    await put(app, headers, `/api/parent/settings/child/${childId}`, { voice: true, stt: "openai", sttModel: "w" }, 200);
+    await put(app, headers, `/api/parent/settings/child/${childId}`, { voice: true, stt: "openai", sttModel: "w", wordAdditions: ["dragon"] }, 200);
     expect((await stt()).json()).toEqual({ text: "a red tower" });
+    expect(h.stt.mime).toBe("audio/webm");
+    h.stt.text = "I live at 42 Maple Street";
+    expect((await stt()).json()).toEqual({ text: "", message: COPY.pii });
+    h.stt.text = "a big dragon";
+    expect((await stt()).json()).toEqual({ text: "", message: COPY.oops });
+    h.stt.text = "tower ".repeat(60);
+    expect((await stt()).json()).toEqual({ text: "", message: COPY.tooLong });
+    const json = await app.inject({ method: "POST", url: "/api/child/stt", payload: { a: 1 } });
+    expect(json.statusCode).toBe(415);
+    expect((await stt("text/plain")).statusCode).toBe(415);
+  });
+
+  it("stt and tts are closed outside hours and before setup", async () => {
+    const { app } = make();
+    const tts = () => app.inject({ method: "POST", url: "/api/child/tts", payload: { text: "x" } });
+    const stt = () => app.inject({ method: "POST", url: "/api/child/stt", headers: { "content-type": "audio/webm" }, payload: Buffer.from("a") });
+    for (const r of [await tts(), await stt()]) {
+      expect(r.statusCode).toBe(403);
+      expect(r.json().message).toBe(COPY.setup);
+    }
+    const { headers, childId } = await setup(app);
+    await put(app, headers, `/api/parent/settings/child/${childId}`, {
+      voice: true, stt: "openai", sttModel: "w", tts: true, ttsProvider: "openai", ttsModel: "t", hoursStart: "11:00",
+    }, 200);
+    for (const r of [await tts(), await stt()]) {
+      expect(r.statusCode).toBe(403);
+      expect(r.json().message).toBe(COPY.closed);
+    }
   });
 
   it("creations: invalid scene → 400; saved ones are listed and can be marked seen", async () => {

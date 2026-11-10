@@ -55,7 +55,7 @@ export function buildApp(o: { db: Db; dataDir: string; registry?: Registry; now?
   app.register(cookie);
 
   app.setErrorHandler((err: Error & { statusCode?: number }, req, reply) => {
-    if (err instanceof HttpError) return reply.status(err.statusCode).send({ error: err.message });
+    if (err instanceof HttpError) return reply.status(err.statusCode).send(err.body ?? { error: err.message });
     const status = err.statusCode ?? 500;
     // never echo provider data or stack traces
     if (status >= 500) {
@@ -65,6 +65,7 @@ export function buildApp(o: { db: Db; dataDir: string; registry?: Registry; now?
     return reply.status(status).send({ error: "bad request" });
   });
 
+  app.setNotFoundHandler((_req, reply) => reply.status(404).send({ error: "not found" }));
   app.register(async (a) => childRoutes(a, ctx));
   app.register(async (a) => parentRoutes(a, ctx));
 

@@ -1,7 +1,8 @@
 import { z } from "zod";
 
 export class HttpError extends Error {
-  constructor(public statusCode: number, message: string) {
+  /** body replaces the default {error: message} response */
+  constructor(public statusCode: number, message: string, public body?: object) {
     super(message);
   }
 }

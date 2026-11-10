@@ -5,7 +5,7 @@ import type { Ctx } from "../app";
 import { getRequest, listEvents, listHeld, listRequests, toCsv } from "../audit";
 import { checkSession, hashPin, isValidPin, login, logout } from "../auth";
 import { maskKey, readKeys, writeKey } from "../keys";
-import { createChild, getChild, getGlobal, updateChild, updateGlobal, type GlobalSettings } from "../settings";
+import { createChild, getChild, getGlobal, SettingsError, updateChild, updateGlobal, type GlobalSettings } from "../settings";
 import { approveHeld, finishPictureCheck, rejectHeld } from "../pipeline";
 import { decodePng } from "./child";
 import type { BuildResult } from "../../shared/api";
@@ -24,13 +24,14 @@ const AuditQuery = z.object({
 const MASK = "***";
 const PUBLIC = new Set(["/api/parent/setup", "/api/parent/login"]);
 
-/** Settings validation errors are our own messages (or zod field paths); safe to return. */
+/** Only validation errors (zod field paths, our own SettingsError text) become a 400; anything else stays a 500. */
 const asBadRequest = (fn: () => void) => {
   try {
     fn();
   } catch (e) {
     if (e instanceof z.ZodError) throw new HttpError(400, `invalid: ${e.issues.map((i) => i.path.join(".")).join(", ")}`);
-    throw new HttpError(400, e instanceof Error ? e.message : "invalid");
+    if (e instanceof SettingsError) throw new HttpError(400, e.message);
+    throw e;
   }
 };
 
@@ -50,8 +51,11 @@ export function parentRoutes(app: FastifyInstance, ctx: Ctx) {
     const b = parse(SetupBody, req.body);
     if (getGlobal(db).pinHash !== null) throw new HttpError(403, "already set up");
     if (!isValidPin(b.pin)) throw new HttpError(400, "PIN must be 6 digits");
-    updateGlobal(db, { pinHash: hashPin(b.pin) }, deps.audit);
-    const childId = createChild(db, b.child);
+    const pinHash = hashPin(b.pin);
+    const childId = db.transaction(() => {
+      updateGlobal(db, { pinHash }, deps.audit);
+      return createChild(db, b.child);
+    })();
     const r = login(db, deps.audit, b.pin, ctx.now());
     if (!r.ok) throw new Error("login after setup failed");
     startSession(reply, r.token);
@@ -83,7 +87,7 @@ export function parentRoutes(app: FastifyInstance, ctx: Ctx) {
     const old = getGlobal(db);
     if (patch.smtp && patch.smtp.pass === MASK) patch.smtp = { ...patch.smtp, pass: old.smtp?.pass ?? "" };
     const next = { ...old, ...patch };
-    if (patch.setupComplete && !(next.builder && (next.moderation !== "off" || next.moderationOffAcknowledged)))
+    if (next.setupComplete && !(next.builder && (next.moderation !== "off" || next.moderationOffAcknowledged)))
       throw new HttpError(400, "setup needs a builder and a moderation choice");
     asBadRequest(() => updateGlobal(db, patch, deps.audit));
     return { ok: true };
@@ -111,7 +115,8 @@ export function parentRoutes(app: FastifyInstance, ctx: Ctx) {
 
   app.put("/api/parent/keys/:provider", async (req) => {
     const { provider } = parse(ProviderParam, req.params);
-    const { key } = parse(z.strictObject({ key: z.string().trim().min(1).max(500).nullable() }), req.body);
+    // R19: at least 20 chars, so the 4-char mask never reveals a whole key
+    const { key } = parse(z.strictObject({ key: z.string().trim().min(20).max(500).nullable() }), req.body);
     const old = readKeys(ctx.dataDir)[provider];
     writeKey(ctx.dataDir, provider, key);
     deps.audit.logEvent("settings_change", { key: `apiKey.${provider}`, old: old ? maskKey(old) : null, new: key ? maskKey(key) : null });

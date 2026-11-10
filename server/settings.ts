@@ -2,6 +2,9 @@ import { z } from "zod";
 import type { Db } from "./db";
 import type { AuditWriter } from "./audit";
 
+/** A settings value was rejected by a rule beyond the schema; safe to show the parent. */
+export class SettingsError extends Error {}
+
 export type ModelChoice = { provider: "openai" | "anthropic" | "google"; model: string };
 export type ChildSettings = {
   typing: boolean; pictures: boolean; voice: boolean;
@@ -82,7 +85,7 @@ export function getGlobal(db: Db): GlobalSettings {
 export function updateGlobal(db: Db, patch: Partial<GlobalSettings>, audit: AuditWriter): void {
   const p = GlobalPatch.parse(patch);
   const old = getGlobal(db);
-  if ("smtp" in p && !p.smtp && anyChildNotifies(db)) throw new Error("smtp is needed while a child uses 'notify'");
+  if ("smtp" in p && !p.smtp && anyChildNotifies(db)) throw new SettingsError("smtp is needed while a child uses 'notify'");
   const put = db.prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value");
   // write and audit atomically: if logging throws, the change rolls back
   db.transaction(() => {
@@ -108,13 +111,13 @@ export function createChild(db: Db, c: { name: string; avatar: string; age: numb
 export function updateChild(db: Db, childId: number, patch: Partial<ChildSettings>, audit: AuditWriter): void {
   const p = ChildPatch.parse(patch);
   if (p.flagHandling === "notify" && !getGlobal(db).smtp)
-    throw new Error("flagHandling 'notify' requires smtp settings");
+    throw new SettingsError("flagHandling 'notify' requires smtp settings");
   const child = getChild(db, childId);
-  if (!child) throw new Error(`no such child ${childId}`);
+  if (!child) throw new SettingsError(`no such child ${childId}`);
   const next = { ...child.settings, ...p };
-  if (next.hoursStart >= next.hoursEnd) throw new Error("hoursStart must be before hoursEnd");
-  if (next.stt !== "browser" && !next.sttModel) throw new Error("sttModel is required for a cloud STT provider");
-  if (next.ttsProvider !== "browser" && !next.ttsModel) throw new Error("ttsModel is required for a cloud TTS provider");
+  if (next.hoursStart >= next.hoursEnd) throw new SettingsError("hoursStart must be before hoursEnd");
+  if (next.stt !== "browser" && !next.sttModel) throw new SettingsError("sttModel is required for a cloud STT provider");
+  if (next.ttsProvider !== "browser" && !next.ttsModel) throw new SettingsError("ttsModel is required for a cloud TTS provider");
   db.transaction(() => {
     db.prepare("UPDATE children SET settings = ? WHERE id = ?").run(JSON.stringify(next), childId);
     logChanges(audit, child.settings, p, { childId });

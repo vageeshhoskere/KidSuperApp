@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { openDb } from "../../server/db";
 import {
   getGlobal, updateGlobal, getChild, createChild, updateChild,
-  DEFAULT_GLOBAL_SETTINGS, DEFAULT_CHILD_SETTINGS,
+  DEFAULT_GLOBAL_SETTINGS, DEFAULT_CHILD_SETTINGS, SettingsError,
 } from "../../server/settings";
 
 const setup = () => {
@@ -80,7 +80,7 @@ describe("settings", () => {
   it("rejects hoursStart >= hoursEnd", () => {
     const { db, audit } = setup();
     const id = createChild(db, { name: "K", avatar: "a", age: 7 });
-    expect(() => updateChild(db, id, { hoursStart: "19:00" }, audit)).toThrow();
+    expect(() => updateChild(db, id, { hoursStart: "19:00" }, audit)).toThrow(SettingsError);
     expect(() => updateChild(db, id, { hoursStart: "10:00", hoursEnd: "09:00" }, audit)).toThrow();
     updateChild(db, id, { hoursStart: "09:00", hoursEnd: "10:00" }, audit);
     expect(getChild(db, id)!.settings.hoursEnd).toBe("10:00");
