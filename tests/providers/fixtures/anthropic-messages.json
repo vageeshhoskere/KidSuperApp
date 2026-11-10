@@ -1,0 +1,33 @@
+{
+  "synthetic": true,
+  "note": "Built from the provider's documented response shape; no API keys available (ruling R7).",
+  "request": {
+    "method": "POST",
+    "url": "https://api.anthropic.com/v1/messages"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "id": "msg_synthetic1",
+      "type": "message",
+      "role": "assistant",
+      "model": "claude-test",
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"title\": \"Purple Castle\", \"blocks\": [{\"shape\": \"cube\", \"color\": \"purple\", \"position\": [0, 0, 0], \"size\": [2, 2, 2], \"rotation\": [0, 0, 0]}]}"
+        }
+      ],
+      "stop_reason": "end_turn",
+      "stop_sequence": null,
+      "stop_details": null,
+      "usage": {
+        "input_tokens": 120,
+        "output_tokens": 60
+      }
+    }
+  }
+}

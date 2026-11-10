@@ -1,0 +1,37 @@
+{
+  "synthetic": true,
+  "note": "Built from the provider's documented response shape; no API keys available (ruling R7).",
+  "request": {
+    "method": "POST",
+    "url": "https://api.openai.com/v1/chat/completions"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "id": "chatcmpl-synthetic1",
+      "object": "chat.completion",
+      "created": 1762732800,
+      "model": "gpt-test",
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "{\"title\": \"Purple Castle\", \"blocks\": [{\"shape\": \"cube\", \"color\": \"purple\", \"position\": [0, 0, 0], \"size\": [2, 2, 2], \"rotation\": [0, 0, 0]}]}",
+            "refusal": null
+          },
+          "logprobs": null,
+          "finish_reason": "stop"
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 120,
+        "completion_tokens": 60,
+        "total_tokens": 180
+      }
+    }
+  }
+}

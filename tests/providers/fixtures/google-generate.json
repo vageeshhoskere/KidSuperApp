@@ -1,0 +1,36 @@
+{
+  "synthetic": true,
+  "note": "Built from the provider's documented response shape; no API keys available (ruling R7).",
+  "request": {
+    "method": "POST",
+    "url": "https://generativelanguage.googleapis.com/v1/models/gemini-test:generateContent"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "candidates": [
+        {
+          "content": {
+            "role": "model",
+            "parts": [
+              {
+                "text": "{\"title\": \"Purple Castle\", \"blocks\": [{\"shape\": \"cube\", \"color\": \"purple\", \"position\": [0, 0, 0], \"size\": [2, 2, 2], \"rotation\": [0, 0, 0]}]}"
+              }
+            ]
+          },
+          "finishReason": "STOP",
+          "index": 0
+        }
+      ],
+      "usageMetadata": {
+        "promptTokenCount": 120,
+        "candidatesTokenCount": 60,
+        "totalTokenCount": 180
+      },
+      "modelVersion": "gemini-test"
+    }
+  }
+}
