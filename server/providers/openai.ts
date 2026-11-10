@@ -2,6 +2,8 @@ import OpenAI from "openai";
 import type { ChatCompletionContentPart } from "openai/resources/chat/completions";
 import { guard, jsonSchemaOf, LIST_TIMEOUT_MS, parseReply, parseScores, ProviderError, wrapData, type Provider } from "./types";
 
+const NOT_CHAT = /embedding|tts|whisper|dall-e|davinci|babbage|moderation|realtime|audio|transcribe|image|search/;
+
 export function makeOpenAI(key: string, fetchImpl: typeof fetch = fetch): Provider {
   const client = new OpenAI({ apiKey: key, fetch: fetchImpl, maxRetries: 0 });
   return {
@@ -10,7 +12,7 @@ export function makeOpenAI(key: string, fetchImpl: typeof fetch = fetch): Provid
     listModels: () =>
       guard(LIST_TIMEOUT_MS, key, async (signal) => {
         const ids: string[] = [];
-        for await (const m of client.models.list({ signal })) ids.push(m.id);
+        for await (const m of client.models.list({ signal })) if (!NOT_CHAT.test(m.id)) ids.push(m.id);
         return ids;
       }),
 
@@ -21,7 +23,8 @@ export function makeOpenAI(key: string, fetchImpl: typeof fetch = fetch): Provid
         const r = await client.chat.completions.create(
           {
             model: o.model,
-            temperature: 0,
+            // reasoning models (o1, o3, gpt-5…) reject any temperature
+            ...(/^(o\d|gpt-5)/.test(o.model) ? {} : { temperature: 0 }),
             messages: [
               { role: "system", content: o.system },
               { role: "user", content },

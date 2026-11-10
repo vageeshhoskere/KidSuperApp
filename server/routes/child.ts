@@ -7,7 +7,7 @@ import { DEFAULT_CHILD_SETTINGS, getGlobal, type ChildSettings } from "../settin
 import { checkGates } from "../gates";
 import { findPii } from "../safety/pii";
 import { checkWords } from "../safety/wordlist";
-import { finishPictureCheck, startBuild } from "../pipeline";
+import { finishPictureCheck, screenText, startBuild } from "../pipeline";
 import { PROVIDER_TIMEOUT_MS } from "../safety/layers";
 import { parseScene, SceneSchema } from "../../shared/scene";
 import { COPY, fill } from "../../shared/copy";
@@ -86,7 +86,8 @@ export function childRoutes(app: FastifyInstance, ctx: Ctx) {
   app.register(async (a) => {
     a.addContentTypeParser(/^audio\//, { parseAs: "buffer", bodyLimit: 5 * MB }, (_req, body, done) => done(null, body));
     a.post("/api/child/stt", { bodyLimit: 5 * MB }, async (req) => {
-      const s = child().settings;
+      const c = child();
+      const s = c.settings;
       requireOpen(s);
       if (!s.voice || s.stt === "browser") throw new HttpError(403, "speech input is off");
       const mime = (req.headers["content-type"] ?? "").split(";")[0].trim().toLowerCase();
@@ -94,11 +95,16 @@ export function childRoutes(app: FastifyInstance, ctx: Ctx) {
       const p = ctx.registry().get(s.stt);
       if (!p?.transcribe) throw new Error(`stt provider ${s.stt} unavailable`);
       const text = await p.transcribe(req.body, mime, PROVIDER_TIMEOUT_MS, s.sttModel);
-      // R18: the transcript is provider text shown to the child, so it gets the pre-provider checks
-      if (findPii(text).found) return { text: "", message: COPY.pii };
-      if (!checkWords(text, s.wordAdditions, s.allowedPhrases).pass) return { text: "", message: COPY.oops };
-      if (text.length > MAX_INPUT) return { text: "", message: COPY.tooLong };
-      return { text };
+      // R18 + R24: the transcript is provider text shown to the child: PII, words and length here, then Layers 2 and 3
+      const blocked = (stage: string, message: string) => {
+        deps.audit.logEvent("stt_blocked", { stage, text: findPii(text).masked }); // never the unmasked transcript
+        return { text: "", message };
+      };
+      if (findPii(text).found) return blocked("pii", COPY.pii);
+      if (!checkWords(text, s.wordAdditions, s.allowedPhrases).pass) return blocked("words", COPY.oops);
+      if (text.length > MAX_INPUT) return blocked("length", COPY.tooLong);
+      const stage = await screenText(deps, c.id, text);
+      return stage ? blocked(stage, COPY.oops) : { text };
     });
   });
 

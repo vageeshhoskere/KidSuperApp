@@ -88,7 +88,8 @@ describe("startBuild", () => {
     });
     expect(a.raw.length).toBe(5); // moderation, checker, builder, output moderation, output checker
     expect(builder.last.generateJson?.system).toBe(BUILDER_SYSTEM_PROMPT);
-    expect(builder.last.generateJson?.data).toContain("<child_data>");
+    // adapters wrap in <child_data> (once); the pipeline passes the plain data
+    expect(builder.last.generateJson?.data).toBe("Request: a red tower");
     expect(creations(db)).toHaveLength(0);
   });
 
@@ -490,5 +491,20 @@ describe("final review fixes: source, limit, held baseScene", () => {
     expect(row(db, heldId).baseScene).toEqual(base);
     expect((await approveHeld(d, heldId)).status).toBe("shown");
     expect(builder.last.generateJson?.data).toContain(JSON.stringify(base));
+  });
+});
+
+describe("final review #5: builder timeout and size", () => {
+  it("builder call gets 60000 ms, checker and moderation calls 20000 ms", async () => {
+    const { d, childId, builder, checker } = setup();
+    const seen: number[] = [];
+    const orig = checker.generateJson.bind(checker);
+    checker.generateJson = (o) => { seen.push(o.timeoutMs); return orig(o); };
+    expect((await startBuild(d, input(childId))).status).toBe("shown");
+    expect(builder.last.generateJson?.timeoutMs).toBe(60_000);
+    expect(seen).toEqual([20_000, 20_000]);
+  });
+  it("builder prompt asks for 10 to 40 blocks", () => {
+    expect(BUILDER_SYSTEM_PROMPT).toMatch(/10 to 40 blocks/);
   });
 });

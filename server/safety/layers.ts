@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { LayerResult } from "../audit";
-import { ProviderError, wrapData, type Provider } from "../providers/types";
+import { ProviderError, type Provider } from "../providers/types";
 
 export const PROVIDER_TIMEOUT_MS = 20_000;
 
@@ -42,7 +42,7 @@ async function judge(
 ): Promise<LayerResult & { verdict?: CheckerVerdict; raw?: string }> {
   try {
     const { value, raw } = await p.generateJson({
-      model, system, data: wrapData(data), image, schema: CheckerVerdictSchema, timeoutMs: PROVIDER_TIMEOUT_MS,
+      model, system, data, image, schema: CheckerVerdictSchema, timeoutMs: PROVIDER_TIMEOUT_MS,
     });
     return { result: value.verdict === "safe" ? "pass" : "fail", detail: { verdict: value }, verdict: value, raw };
   } catch (e) {

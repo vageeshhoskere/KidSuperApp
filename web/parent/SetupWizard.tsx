@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { putGlobal, setup } from "./api";
-import { canFinishWizard, pinsMatch, validatePin } from "./forms";
+import { canFinishWizard, modelChoiceFor, pickProviders, pinsMatch, validatePin } from "./forms";
 import Providers, { PROVIDERS, type Models } from "./Providers";
 import type { ModelChoice } from "../../server/settings";
 
@@ -8,15 +8,17 @@ export const AVATARS = ["🐶", "🐱", "🦊", "🐼", "🐸", "🦁", "🐵", 
 const STEPS = ["PIN", "Child", "Keys", "Models", "Done"];
 
 export function ModelPick({ label, value, models, onChange }: { label: string; value: ModelChoice | null; models: Models; onChange: (v: ModelChoice | null) => void }) {
-  const providers = PROVIDERS.filter((p) => models[p]?.length);
   return (
     <div className="field">
       <strong>{label}</strong>
-      <select aria-label={`${label} provider`} value={value?.provider ?? ""} onChange={(e) => { const p = e.target.value as ModelChoice["provider"]; onChange(p ? { provider: p, model: models[p]![0] } : null); }}>
+      <select aria-label={`${label} provider`} value={value?.provider ?? ""} onChange={(e) => onChange(modelChoiceFor(e.target.value))}>
         <option value="">choose provider</option>
-        {providers.map((p) => <option key={p}>{p}</option>)}
+        {pickProviders(models, value).map((p) => <option key={p}>{p}</option>)}
       </select>
-      {value && <select aria-label={`${label} model`} value={value.model} onChange={(e) => onChange({ ...value, model: e.target.value })}>{[...new Set([value.model, ...(models[value.provider] ?? [])])].map((m) => <option key={m}>{m}</option>)}</select>}
+      {value && <select aria-label={`${label} model`} value={value.model} onChange={(e) => onChange({ ...value, model: e.target.value })}>
+        <option value="">choose model</option>
+        {[...new Set([value.model, ...(models[value.provider] ?? [])])].filter(Boolean).map((m) => <option key={m}>{m}</option>)}
+      </select>}
     </div>
   );
 }
@@ -72,7 +74,7 @@ export default function SetupWizard({ resume, onDone }: { resume: boolean; onDon
         <label>Moderation (Layer 2) <select value={moderation} onChange={(e) => setModeration(e.target.value as typeof moderation)}>
           <option value="off">off</option>{(["openai", "google"] as const).map((p) => <option key={p}>{p}</option>)}</select></label>
         {moderation === "off" && <label><input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} /> I understand Layer 2 is off</label>}
-        <button disabled={!canFinishWizard({ builder, moderation, moderationOffAcknowledged: ack })} onClick={next}>Next</button>
+        <button disabled={!canFinishWizard({ builder, checker, moderation, moderationOffAcknowledged: ack })} onClick={next}>Next</button>
       </>)}
       {step === 4 && (<>
         <p>All set. Finish to open the child's screen.</p>

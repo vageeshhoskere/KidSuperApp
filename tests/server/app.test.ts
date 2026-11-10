@@ -40,7 +40,7 @@ function make(o: { verdicts?: string[]; missing?: ProviderId[] } = {}) {
   const providers: Partial<Record<ProviderId, FakeProvider>> = { openai: mod, google: checker, anthropic: builder };
   for (const id of o.missing ?? []) delete providers[id];
   const app = buildApp({ db, dataDir, registry: { get: (id) => providers[id] ?? null }, now: () => NOW });
-  return { app, db, dataDir, builder, stt };
+  return { app, db, dataDir, builder, stt, mod, checker, verdicts };
 }
 
 /** First-run setup: PIN + child, providers chosen, setup finished. Returns the session cookie. */
@@ -447,5 +447,59 @@ describe("final review fixes: guards", () => {
     const r = await app.inject({ method: "POST", url: "/api/parent/children", headers, payload: { name: "Kim", avatar: "cat", age: 6 } });
     const ev = (await app.inject({ method: "GET", url: "/api/parent/events?type=child_created", headers })).json();
     expect(ev.map((e: { detail: unknown }) => e.detail)).toEqual([{ childId, name: "Sam" }, { childId: r.json().id, name: "Kim" }]);
+  });
+});
+
+describe("final review #6: cloud STT transcripts pass Layers 2 and 3", () => {
+  async function voiceOn() {
+    const h = make();
+    const { headers, childId } = await setup(h.app);
+    await put(h.app, headers, `/api/parent/settings/child/${childId}`, { voice: true, stt: "openai", sttModel: "w" }, 200);
+    const send = () => h.app.inject({ method: "POST", url: "/api/child/stt", headers: { "content-type": "audio/webm" }, payload: Buffer.from("aud") });
+    const events = async () => (await h.app.inject({ method: "GET", url: "/api/parent/events?type=stt_blocked", headers })).json();
+    return { ...h, send, events };
+  }
+
+  it("a safe transcript is checked by moderation and the checker (kind request, child's age), then returned", async () => {
+    const h = await voiceOn();
+    expect((await h.send()).json()).toEqual({ text: "a red tower" });
+    expect(h.mod.last.moderate).toBe("a red tower");
+    expect(h.checker.last.generateJson?.system).toContain("age 7");
+    expect(h.checker.last.generateJson?.system).toContain("child's request");
+    expect(h.checker.last.generateJson?.data).toBe("a red tower");
+  });
+
+  it("checker unsafe → oops, audited as stt_blocked with stage, transcript masked", async () => {
+    const h = await voiceOn();
+    h.verdicts.push("unsafe");
+    h.stt.text = "a scary tower";
+    expect((await h.send()).json()).toEqual({ text: "", message: COPY.oops });
+    expect((await h.events()).map((e: { detail: unknown }) => e.detail)).toEqual([{ stage: "checker", text: "a scary tower" }]);
+  });
+
+  it("moderation fail → oops, checker not called", async () => {
+    const h = await voiceOn();
+    h.mod.moderate = async () => ({ scores: { violence: 0.9 }, raw: "{}" });
+    const before = h.checker.calls.generateJson;
+    expect((await h.send()).json()).toEqual({ text: "", message: COPY.oops });
+    expect(h.checker.calls.generateJson).toBe(before);
+    expect((await h.events())[0].detail).toEqual({ stage: "moderation", text: "a red tower" });
+  });
+
+  it("a provider error in a layer → oops, audited as error", async () => {
+    const h = await voiceOn();
+    h.checker.generateJson = async () => { throw new Error("down"); };
+    expect((await h.send()).json()).toEqual({ text: "", message: COPY.oops });
+    expect((await h.events())[0].detail).toEqual({ stage: "error", text: "a red tower" });
+  });
+
+  it("Layer 1 / PII / length blocks are audited too; PII is stored masked", async () => {
+    const h = await voiceOn();
+    h.stt.text = "call me on 555 123 4567";
+    expect((await h.send()).json()).toEqual({ text: "", message: COPY.pii });
+    const ev = await h.events();
+    expect(ev[0].detail).toEqual({ stage: "pii", text: "call me on [phone]" });
+    expect(JSON.stringify(ev)).not.toContain("555");
+    expect(h.mod.last.moderate).toBeUndefined(); // never sent to a provider
   });
 });

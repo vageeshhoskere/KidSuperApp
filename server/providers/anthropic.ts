@@ -24,7 +24,7 @@ export function makeAnthropic(key: string, fetchImpl: typeof fetch = fetch): Pro
         const r = await client.messages.create(
           {
             model: o.model,
-            max_tokens: 16000,
+            max_tokens: 8000, // a 40-block scene is ~4k tokens; leaves headroom without letting a runaway reply eat the 60 s budget
             system: o.system,
             messages: [{ role: "user", content }],
             output_config: { format: { type: "json_schema", schema: transformJSONSchema(jsonSchemaOf(o.schema)) } },
