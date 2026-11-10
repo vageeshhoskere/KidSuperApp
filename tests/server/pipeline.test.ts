@@ -1,12 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { openDb, type Db } from "../../server/db";
 import { createChild, updateChild, updateGlobal, type ChildSettings } from "../../server/settings";
 import { countBuildsSince, getRequest, listEvents, listHeld, listRequests, makeAuditWriter, type AuditRequest, type AuditWriter } from "../../server/audit";
 import { makeFakeProvider, type FakeProvider } from "../../server/providers/fake";
-import type { ProviderId } from "../../server/providers/types";
-import { approveHeld, BUILDER_SYSTEM_PROMPT, finishPictureCheck, rejectHeld, startBuild, type Deps } from "../../server/pipeline";
+import { ProviderError, type ProviderId } from "../../server/providers/types";
+import { __resetPipelineState, approveHeld, BUILDER_SYSTEM_PROMPT, finishPictureCheck, rejectHeld, startBuild, type Deps } from "../../server/pipeline";
 import { makeNotify } from "../../server/notify";
 import { COPY } from "../../shared/copy";
+import type { BuildResult } from "../../shared/api";
 import { PALETTE, SHAPES, type Scene } from "../../shared/scene";
 import { SAFE_IDEAS } from "../../server/safety/ideas";
 
@@ -18,9 +19,11 @@ const SCENE: Scene = {
 };
 const PNG = Buffer.from("png");
 
+afterEach(() => __resetPipelineState());
+
 type Opts = {
   verdicts?: string[]; build?: unknown[] | ((o: never) => unknown); builderFail?: "timeout" | "malformed";
-  scores?: Record<string, number>; child?: Partial<ChildSettings>; age?: number; audit?: AuditWriter;
+  scores?: Record<string, number>; modFail?: "timeout"; child?: Partial<ChildSettings>; age?: number; audit?: AuditWriter;
   notify?: Deps["notify"]; pictureTimeoutMs?: number;
 };
 
@@ -35,8 +38,15 @@ function setup(o: Opts = {}) {
   const childId = createChild(db, { name: "Sam", avatar: "a", age: o.age ?? 7 });
   updateChild(db, childId, { pictureCheck: false, ...o.child }, realAudit);
   const verdicts = [...(o.verdicts ?? [])];
-  const mod = makeFakeProvider({ moderate: o.scores ?? { violence: 0.01 } });
-  const checker = makeFakeProvider({ json: () => v(verdicts.shift() ?? "safe") });
+  const mod = makeFakeProvider({ moderate: o.scores ?? { violence: 0.01 }, fail: o.modFail });
+  // a verdict of "timeout" or "error" makes that checker call throw instead
+  const checker = makeFakeProvider({
+    json: () => {
+      const next = verdicts.shift() ?? "safe";
+      if (next === "timeout" || next === "error") throw new ProviderError(next);
+      return v(next);
+    },
+  });
   const builder = makeFakeProvider(
     o.builderFail ? { fail: o.builderFail } : { json: (o.build as unknown[] | undefined) ?? [SCENE, SCENE, SCENE] },
   );
@@ -224,7 +234,74 @@ describe("startBuild", () => {
     expect(rows(db)[0].outcome).toBe("closed");
     updateGlobal(db, { setupComplete: false }, makeAuditWriter(db));
     expect(await startBuild(d, input(childId))).toEqual({ status: "closed", message: COPY.setup });
+    expect(rows(db).map((r) => r.outcome)).toEqual(["closed", "closed"]);
     noCalls(mod);
+  });
+});
+
+describe("provider errors in safety layers fail closed", () => {
+  const errorRow = (db: Db, r: BuildResult) => {
+    expect(r).toMatchObject({ status: "error", message: COPY.oops });
+    const a = row(db, (r as { requestId: string }).requestId);
+    expect(a.outcome).toBe("error");
+    return a;
+  };
+
+  it("moderation timeout → error", async () => {
+    const { db, d, childId, checker, builder } = setup({ modFail: "timeout" });
+    const a = errorRow(db, await startBuild(d, input(childId)));
+    expect(a.layer2).toMatchObject({ result: "fail", detail: { error: "timeout" } });
+    noCalls(checker, builder);
+  });
+
+  it("input checker timeout → error, not held (hold mode)", async () => {
+    const { db, d, childId, builder } = setup({ child: { flagHandling: "hold" }, verdicts: ["timeout"] });
+    const a = errorRow(db, await startBuild(d, input(childId)));
+    expect(a.layer3).toMatchObject({ result: "fail", detail: { error: "timeout" } });
+    expect(listHeld(db)).toHaveLength(0);
+    expect(builder.calls.generateJson).toBe(0);
+  });
+
+  it("input checker error under notify → error, notify not called", async () => {
+    const { db, d, childId, notify } = setup({ child: { flagHandling: "notify" }, verdicts: ["error"] });
+    errorRow(db, await startBuild(d, input(childId)));
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("output checker timeout → error", async () => {
+    const { db, d, childId } = setup({ verdicts: ["safe", "timeout"] });
+    const r = await startBuild(d, input(childId));
+    expect(r).not.toHaveProperty("scene");
+    const a = errorRow(db, r);
+    expect(a.outputText).toMatchObject({ detail: { layer3: { result: "fail", detail: { error: "timeout" } } } });
+  });
+
+  it("picture check timeout → error", async () => {
+    const { db, d, childId } = setup({ child: { pictureCheck: true }, verdicts: ["safe", "safe", "timeout"] });
+    const id = ((await startBuild(d, input(childId))) as { requestId: string }).requestId;
+    const f = await finishPictureCheck(d, id, PNG);
+    expect(f).not.toHaveProperty("scene");
+    const a = errorRow(db, f);
+    expect(a.pictureCheck).toMatchObject({ result: "fail", detail: { error: "timeout" } });
+    expect((await startBuild(d, input(childId))).status).toBe("needs_picture"); // lock released
+  });
+
+  it("audit write failure in finishPictureCheck → COPY.oops, never shown", async () => {
+    const { db, d, childId } = setup({ child: { pictureCheck: true } });
+    const id = ((await startBuild(d, input(childId))) as { requestId: string }).requestId;
+    d.audit = { logRequest: () => { throw new Error("disk full"); }, logEvent: () => {} };
+    expect(await finishPictureCheck(d, id, PNG)).toEqual({ status: "error", message: COPY.oops });
+    expect(getRequest(db, id)).toBeNull();
+  });
+
+  it("audit write failure in approveHeld → COPY.oops, never shown, no creation", async () => {
+    const { db, d, childId } = setup({ child: { flagHandling: "hold" }, verdicts: ["unsure"] });
+    const heldId = ((await startBuild(d, input(childId))) as { requestId: string }).requestId;
+    const real = d.audit;
+    d.audit = { logRequest: () => { throw new Error("disk full"); }, logEvent: real.logEvent };
+    expect(await approveHeld(d, heldId)).toEqual({ status: "error", message: COPY.oops });
+    expect(rows(db).map((r) => r.outcome)).toEqual(["held"]);
+    expect(creations(db)).toHaveLength(0);
   });
 });
 

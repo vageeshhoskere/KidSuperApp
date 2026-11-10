@@ -52,6 +52,23 @@ type Pending = {
 const busy = new Set<number>();
 const pending = new Map<string, Pending>();
 
+/** Test-only: drops all in-flight builds so one failing test cannot leak a lock into the next. */
+export function __resetPipelineState(): void {
+  for (const p of pending.values()) clearTimeout(p.timer);
+  pending.clear();
+  busy.clear();
+}
+
+/** layers.ts turns a provider throw into a fail with detail.error; that is an error (oops), never a safety verdict. */
+const providerError = (l: LayerResult): string | undefined => {
+  const e = (l.detail as { error?: unknown } | null)?.error;
+  return e === undefined ? undefined : String(e);
+};
+const throwIfProviderError = (name: string, l: LayerResult) => {
+  const e = providerError(l);
+  if (e !== undefined) throw new Error(`${name} provider ${e}`);
+};
+
 const layer = ({ result, detail }: LayerResult): LayerResult => ({ result, detail });
 const errText = (e: unknown) =>
   e instanceof ProviderError ? `${e.kind}: ${e.message}` : e instanceof Error ? e.message : String(e);
@@ -160,6 +177,10 @@ async function buildAndShow(d: Deps, row: AuditRequest, b: Build): Promise<Build
       layer1: o?.layer1 ?? NOT_RUN, layer2: o?.layer2 ?? NOT_RUN, layer3: o?.layer3 ?? NOT_RUN,
     },
   };
+  if (o) {
+    throwIfProviderError("output layer2", o.layer2);
+    throwIfProviderError("output layer3", o.layer3);
+  }
   if (!o?.ok) return log(d, row, "redirected", redirect(d, row));
 
   if (!b.pictureCheck) return show(d, row, scene, b.isNew);
@@ -209,6 +230,8 @@ async function runStart(d: Deps, i: BuildInput, text: string, row: AuditRequest)
   const p = resolve(d, g, child.age, child.settings);
   const c = await runLayers(text, "request", p.checks, row.raw);
   Object.assign(row, { layer1: c.layer1, layer2: c.layer2, layer3: c.layer3, intent: c.intent, summary: c.summary });
+  throwIfProviderError("layer2", c.layer2);
+  throwIfProviderError("layer3", c.layer3);
   if (!c.ok) return flagged(d, row, child.settings.flagHandling);
 
   return buildAndShow(d, row, {
@@ -248,6 +271,7 @@ export async function finishPictureCheck(d: Deps, requestId: string, png: Buffer
     const pc = await runPictureCheck(provider, p.checker.model, png, p.age);
     if (pc.raw) row.raw.push(pc.raw);
     row.pictureCheck = layer(pc);
+    throwIfProviderError("picture check", row.pictureCheck);
     return pc.result === "pass" ? show(d, row, p.scene, p.isNew) : log(d, row, "redirected", redirect(d, row));
   } catch (e) {
     return fail(d, row, e);
