@@ -5,13 +5,30 @@ import { buildApp } from "./app";
 import { openDb } from "./db";
 import { purgeOlderThan } from "./audit";
 import { getGlobal } from "./settings";
+import { makeFakeProvider } from "./providers/fake";
+import { SceneSchema } from "../shared/scene";
+import type { Registry } from "./providers/types";
+
+/** Test-only: one scripted provider behind every id. No AI, no real safety checks. */
+function fakeRegistry(): Registry {
+  console.warn("WARNING: FAKE_PROVIDERS=1 — no real AI and no real safety checks");
+  const cube = (y: number) => ({ shape: "cube", color: "red", position: [0, y, 0], size: [1, 1, 1], rotation: [0, 0, 0] });
+  const fake = makeFakeProvider({
+    json: (o) => o.schema === SceneSchema
+      ? { title: "Red Tower", blocks: [cube(0.5), cube(1.5), cube(2.5)] }
+      : { intent: "build a toy", summary: "toy build", verdict: "safe", categories: [], reason: "ok" },
+    moderate: { violence: 0 },
+  });
+  return { get: () => fake };
+}
 
 const dataDir = process.env.DATA_DIR ?? "./data";
 fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
 const db = openDb(path.join(dataDir, "app.db"));
 
-// buildApp builds the registry from keys.json and rebuilds it after every key change
-const app = buildApp({ db, dataDir });
+// Without an injected registry, buildApp builds it from keys.json and rebuilds it after every key change.
+// An injected registry (FAKE_PROVIDERS) is never rebuilt.
+const app = buildApp({ db, dataDir, registry: process.env.FAKE_PROVIDERS === "1" ? fakeRegistry() : undefined });
 
 const purge = () => {
   try {
