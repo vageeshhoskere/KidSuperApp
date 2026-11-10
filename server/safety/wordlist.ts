@@ -5,9 +5,10 @@ const DEFAULTS: [string, string][] = Object.entries(words as Record<string, stri
   ts.map((t): [string, string] => [cat, t]),
 );
 
-// Term letters with an optional single separator between each, bounded by non-alphanumerics.
+// Term letters with an optional single separator between each, then an optional doubled last letter
+// and inflection suffix (shoot -> shooting, stab -> stabbing), bounded by non-alphanumerics.
 const termRegex = (squashed: string) =>
-  new RegExp(`(?<![a-z0-9])${[...squashed].map((c) => c.replace(/[^a-z0-9]/g, "\\$&")).join(" ?")}(?![a-z0-9])`);
+  new RegExp(`(?<![a-z0-9])${[...squashed].join(" ?")}(?:${squashed.at(-1)})?(?:s|es|ed|ing|er|ers|y)?(?![a-z0-9])`);
 
 export function checkWords(text: string, extra: string[], allowed: string[]): { pass: boolean; matched: string[]; category?: string } {
   let spaced = ` ${normalize(text).spaced} `;

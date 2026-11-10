@@ -11,9 +11,11 @@ describe("checkWords", () => {
     expect(r.category).toBe("weapons");
   });
   it("allowed phrase exempts an extra term", () => {
-    expect(checkWords("a shoot star", ["shoot"], []).pass).toBe(false);
-    expect(checkWords("a shoot star", ["shoot"], ["shoot star"]).pass).toBe(true);
+    expect(checkWords("shooting star", ["shoot"], []).pass).toBe(false);
     expect(checkWords("shooting star", ["shoot"], ["shooting star"]).pass).toBe(true);
+  });
+  it.each(["stabbing", "shooting people", "gunner", "guns"])("fails inflected %s", (t) => {
+    expect(checkWords(t, [], []).pass).toBe(false);
   });
   it("passes begun and harmless text", () => {
     expect(checkWords("begun", [], []).pass).toBe(true);
