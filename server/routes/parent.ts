@@ -50,7 +50,7 @@ export function parentRoutes(app: FastifyInstance, ctx: Ctx) {
   // public: the page needs it before login to choose between wizard and PIN screen; leaks no settings
   app.get("/api/parent/status", async () => {
     const g = getGlobal(db);
-    return { pinSet: g.pinHash !== null, setupComplete: g.setupComplete };
+    return { pinSet: g.pinHash !== null, setupComplete: g.setupComplete, ...(ctx.fakeProviders && { fakeProviders: true }) };
   });
 
   app.get("/api/parent/children", async () =>

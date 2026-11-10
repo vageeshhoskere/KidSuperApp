@@ -83,8 +83,9 @@ npm run redteam
 It prints a table (`tag | expect | got | pass`) and `passed X/Y`, and exits with an error if any request that should be blocked was shown. Ordinary requests that get blocked are listed as failures but do not fail the run.
 
 - It uses your real keys, so it costs a small amount of money.
-- Its requests are real: they appear in the audit log (child "Sam" or whoever you set up) and count as builds. You can ignore them.
-- For the run only, it turns the picture check off, lifts the daily limit and hours and sets flag handling to redirect; your settings are restored afterwards.
+- Stop the server first (close the terminal running `npm start`), so the script has the data folder to itself.
+- The runs are real, audited requests, not a simulation. Ignore them in the audit log.
+- Your saved settings are never changed. The script applies its own settings to its own requests only: picture check off, open all day, flagged requests redirected. The daily build limit does not matter.
 - With no keys configured it prints "not run: no keys configured".
 
 ## For developers

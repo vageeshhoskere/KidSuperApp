@@ -20,6 +20,8 @@ export type Deps = {
 };
 export type BuildInput = {
   childId: number; mode: "typed" | "voice" | "pictures"; text: string; baseScene?: Scene; parentRequestId?: string;
+  /** Set by code only (never parsed from a request): merged into this build's settings snapshot, never persisted. */
+  settingsOverride?: Partial<ChildSettings>;
 };
 
 export const BUILDER_SYSTEM_PROMPT = [
@@ -218,24 +220,25 @@ async function runStart(d: Deps, i: BuildInput, text: string, row: AuditRequest)
   const g = getGlobal(d.db);
   const child = getChild(d.db, i.childId);
   if (!child) throw new Error(`no such child ${i.childId}`);
+  const settings: ChildSettings = { ...child.settings, ...i.settingsOverride };
   const buildsToday = countBuildsSince(d.db, i.childId, startOfLocalDay(now).toISOString());
   row.builder = g.builder;
   row.checker = g.checker ?? g.builder;
 
-  const gate = checkGates({ global: g, child: child.settings, mode: i.mode, buildsToday, now });
+  const gate = checkGates({ global: g, child: settings, mode: i.mode, buildsToday, now });
   if (!gate.ok) return log(d, row, "closed", { status: "closed", message: gate.reason === "setup" ? COPY.setup : COPY.closed });
   if (text.length > MAX_INPUT) return log(d, row, "redirected", redirect(d, row, COPY.tooLong));
   if (findPii(text).found) return log(d, row, "redirected", redirect(d, row, COPY.pii));
 
-  const p = resolve(d, g, child.age, child.settings);
+  const p = resolve(d, g, child.age, settings);
   const c = await runLayers(text, "request", p.checks, row.raw);
   Object.assign(row, { layer1: c.layer1, layer2: c.layer2, layer3: c.layer3, intent: c.intent, summary: c.summary });
   throwIfProviderError("layer2", c.layer2);
   throwIfProviderError("layer3", c.layer3);
-  if (!c.ok) return flagged(d, row, child.settings.flagHandling);
+  if (!c.ok) return flagged(d, row, settings.flagHandling);
 
   return buildAndShow(d, row, {
-    ...p, text, baseScene: i.baseScene, pictureCheck: child.settings.pictureCheck, isNew: false,
+    ...p, text, baseScene: i.baseScene, pictureCheck: settings.pictureCheck, isNew: false,
     release: () => busy.delete(i.childId),
   });
 }

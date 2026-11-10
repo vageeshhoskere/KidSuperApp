@@ -7,6 +7,8 @@ import { purgeOlderThan } from "./audit";
 import { getGlobal } from "./settings";
 import { makeFakeProvider } from "./providers/fake";
 import { SceneSchema } from "../shared/scene";
+import { fakeProvidersRefusal } from "./fake-guard";
+import { readKeys } from "./keys";
 import type { Registry } from "./providers/types";
 
 /** Test-only: one scripted provider behind every id. No AI, no real safety checks. */
@@ -24,11 +26,16 @@ function fakeRegistry(): Registry {
 
 const dataDir = process.env.DATA_DIR ?? "./data";
 fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+const refusal = fakeProvidersRefusal(process.env.FAKE_PROVIDERS, readKeys(dataDir));
+if (refusal) {
+  console.error(refusal);
+  process.exit(1);
+}
 const db = openDb(path.join(dataDir, "app.db"));
 
 // Without an injected registry, buildApp builds it from keys.json and rebuilds it after every key change.
 // An injected registry (FAKE_PROVIDERS) is never rebuilt.
-const app = buildApp({ db, dataDir, registry: process.env.FAKE_PROVIDERS === "1" ? fakeRegistry() : undefined });
+const app = buildApp({ db, dataDir, ...(process.env.FAKE_PROVIDERS === "1" ? { registry: fakeRegistry(), fakeProviders: true } : {}) });
 
 const purge = () => {
   try {

@@ -11,6 +11,7 @@ type View = "loading" | "setup" | "login" | "resume" | "main";
 
 export default function ParentApp() {
   const [view, setView] = useState<View>("loading");
+  const [fake, setFake] = useState(false);
   const [tab, setTab] = useState<"audit" | "settings">("audit");
   const timer = useRef<number>();
 
@@ -21,7 +22,7 @@ export default function ParentApp() {
       setView((await getGlobal()).setupComplete ? "main" : "resume");
     } catch { setView("login"); }
   }, []);
-  useEffect(() => { void route(false); }, [route]);
+  useEffect(() => { void route(false); void getStatus().then((s) => setFake(!!s.fakeProviders)).catch(() => {}); }, [route]);
 
   useEffect(() => {
     window.addEventListener("parent-locked", lock);
@@ -37,12 +38,14 @@ export default function ParentApp() {
     return () => { evs.forEach((e) => window.removeEventListener(e, reset)); clearTimeout(timer.current); };
   }, [view, lock]);
 
-  if (view === "loading") return <main><p>Loading…</p></main>;
-  if (view === "setup") return <main><SetupWizard resume={false} onDone={() => void route(true)} /></main>;
-  if (view === "resume") return <main><SetupWizard resume onDone={() => void route(true)} /></main>;
-  if (view === "login") return <main><Login onDone={() => void route(true)} /></main>;
+  const banner = fake && <p role="alert" style={{ background: "#c62828", color: "#fff", padding: "8px", margin: 0 }}>TEST MODE: fake AI, no real safety checks. Do not let a child use this.</p>;
+  if (view === "loading") return <main>{banner}<p>Loading…</p></main>;
+  if (view === "setup") return <main>{banner}<SetupWizard resume={false} onDone={() => void route(true)} /></main>;
+  if (view === "resume") return <main>{banner}<SetupWizard resume onDone={() => void route(true)} /></main>;
+  if (view === "login") return <main>{banner}<Login onDone={() => void route(true)} /></main>;
   return (
     <main>
+      {banner}
       <nav>
         <button aria-pressed={tab === "audit"} onClick={() => setTab("audit")}>Audit</button>
         <button aria-pressed={tab === "settings"} onClick={() => setTab("settings")}>Settings</button>

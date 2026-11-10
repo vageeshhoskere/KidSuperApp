@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openDb, type Db } from "../../server/db";
-import { createChild, updateChild, updateGlobal, type ChildSettings } from "../../server/settings";
+import { createChild, getChild, updateChild, updateGlobal, type ChildSettings } from "../../server/settings";
 import { countBuildsSince, getRequest, listEvents, listHeld, listRequests, makeAuditWriter, type AuditRequest, type AuditWriter } from "../../server/audit";
 import { makeFakeProvider, type FakeProvider } from "../../server/providers/fake";
 import { ProviderError, type ProviderId } from "../../server/providers/types";
@@ -66,6 +66,15 @@ const input = (childId: number, text = "a red tower") => ({ childId, mode: "type
 const noCalls = (...ps: FakeProvider[]) => ps.forEach((p) => expect(p.calls.generateJson + p.calls.moderate).toBe(0));
 
 describe("startBuild", () => {
+  it("settingsOverride applies to that build only and is never persisted", async () => {
+    const { db, d, childId } = setup({ child: { pictureCheck: true } });
+    const before = getChild(db, childId)!.settings;
+    const r = await startBuild(d, { ...input(childId), settingsOverride: { pictureCheck: false } });
+    expect(r.status).toBe("shown"); // without the override this would be needs_picture
+    expect(getChild(db, childId)!.settings).toEqual(before);
+    expect((await startBuild(d, input(childId))).status).toBe("needs_picture");
+  });
+
   it("happy path with picture check off returns shown and audits shown", async () => {
     const { db, d, childId, builder } = setup();
     const r = await startBuild(d, input(childId));

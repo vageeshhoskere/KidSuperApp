@@ -24,11 +24,12 @@ export type Ctx = {
   owners: Map<string, number | "parent">;
   /** R4: last title shown to each child; TTS speaks only fill(COPY.here, {title}) */
   lastShown: Map<number, string>;
+  fakeProviders: boolean;
   /** v1 has one child: the first row. null before setup is complete. */
   currentChild: () => NonNullable<ReturnType<typeof getChild>> | null;
 };
 
-export function buildApp(o: { db: Db; dataDir: string; registry?: Registry; now?: () => Date }): FastifyInstance {
+export function buildApp(o: { db: Db; dataDir: string; registry?: Registry; fakeProviders?: boolean; now?: () => Date }): FastifyInstance {
   const { db, dataDir } = o;
   const now = o.now ?? (() => new Date());
   let registry = o.registry ?? makeRegistry(readKeys(dataDir));
@@ -44,6 +45,7 @@ export function buildApp(o: { db: Db; dataDir: string; registry?: Registry; now?
     rebuildRegistry: () => { if (!o.registry) registry = makeRegistry(readKeys(dataDir)); },
     owners: new Map(),
     lastShown: new Map(),
+    fakeProviders: o.fakeProviders === true,
     currentChild: () => {
       if (!getGlobal(db).setupComplete) return null;
       const r = db.prepare("SELECT id FROM children ORDER BY id LIMIT 1").get() as { id: number } | undefined;

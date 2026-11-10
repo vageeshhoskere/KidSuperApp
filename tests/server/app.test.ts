@@ -72,6 +72,21 @@ async function put(app: FastifyInstance, headers: Record<string, string>, url: s
 
 const build = (app: FastifyInstance, payload: object) => app.inject({ method: "POST", url: "/api/child/build", payload });
 
+describe("build body", () => {
+  it("rejects a settingsOverride key (the override is code-only)", async () => {
+    const { app } = make();
+    await setup(app);
+    const r = await build(app, { mode: "typed", text: "a red tower", settingsOverride: { pictureCheck: false } });
+    expect(r.statusCode).toBe(400);
+  });
+  it("status reports fakeProviders only when the fake registry is active", async () => {
+    const { app } = make();
+    expect((await app.inject({ url: "/api/parent/status" })).json()).not.toHaveProperty("fakeProviders");
+    const fake = buildApp({ db: openDb(":memory:"), dataDir: fs.mkdtempSync(path.join(os.tmpdir(), "app-test-")), registry: { get: () => null }, fakeProviders: true });
+    expect((await fake.inject({ url: "/api/parent/status" })).json().fakeProviders).toBe(true);
+  });
+});
+
 describe("parent auth", () => {
   it("every parent route except setup/login returns 401 without a cookie", async () => {
     const { app } = make();

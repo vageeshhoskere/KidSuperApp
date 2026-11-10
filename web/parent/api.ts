@@ -20,7 +20,7 @@ const send = <T>(m: string, u: string, b: unknown = {}) => call<T>(m, u, b);
 export const getGlobal = () => get<GlobalView>("/api/parent/settings/global");
 export const putGlobal = (p: Partial<GlobalSettings>) => send("PUT", "/api/parent/settings/global", p);
 export const setup = (pin: string, child: { name: string; avatar: string; age: number }) => send<{ childId: number }>("POST", "/api/parent/setup", { pin, child });
-export const getStatus = () => get<{ pinSet: boolean; setupComplete: boolean }>("/api/parent/status");
+export const getStatus = () => get<{ pinSet: boolean; setupComplete: boolean; fakeProviders?: boolean }>("/api/parent/status");
 export const login = (pin: string) => send("POST", "/api/parent/login", { pin });
 export const logout = () => send("POST", "/api/parent/logout");
 export const getKeys = () => get<Record<string, string | null>>("/api/parent/keys");
