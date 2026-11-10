@@ -3,6 +3,7 @@ import { getGlobal, listChildren, putChild, putGlobal, type Child, type GlobalVi
 import Providers, { type Models } from "./Providers";
 import { ModelPick } from "./SetupWizard";
 import TestBuild from "./TestBuild";
+import { cloudWarnings } from "./forms";
 import type { ChildSettings } from "../../server/settings";
 
 const lines = (s: string) => s.split("\n").map((x) => x.trim()).filter(Boolean);
@@ -12,10 +13,9 @@ function ChildForm({ child }: { child: Child }) {
   const [words, setWords] = useState(s.wordAdditions.join("\n")), [phrases, setPhrases] = useState(s.allowedPhrases.join("\n"));
   const [msg, setMsg] = useState("");
   const set = <K extends keyof ChildSettings>(k: K, v: ChildSettings[K]) => setS((o) => ({ ...o, [k]: v }));
-  const cloud = (p: string) => `Your child's voice will be sent to ${p}.`;
 
   async function save() {
-    const w = [s.stt !== "browser" && cloud(s.stt), s.tts && s.ttsProvider !== "browser" && cloud(s.ttsProvider)].filter(Boolean);
+    const w = cloudWarnings(s);
     if (w.length && !confirm(w.join("\n"))) return;
     try {
       await putChild(child.id, { ...s, wordAdditions: lines(words), allowedPhrases: lines(phrases) });
@@ -36,7 +36,7 @@ function ChildForm({ child }: { child: Child }) {
       <label>Text to speech <select value={s.ttsProvider} onChange={(e) => set("ttsProvider", e.target.value as ChildSettings["ttsProvider"])}>
         <option>browser</option><option>openai</option><option>google</option></select></label>
       {s.ttsProvider !== "browser" && <><label>TTS model <input value={s.ttsModel} onChange={(e) => set("ttsModel", e.target.value)} /></label>
-        {s.tts && <p className="warn">Your child's voice will be sent to {s.ttsProvider}.</p>}</>}
+        {s.tts && <p className="warn">The words the app speaks will be sent to {s.ttsProvider}.</p>}</>}
       <label>When a request is flagged <select value={s.flagHandling} onChange={(e) => set("flagHandling", e.target.value as ChildSettings["flagHandling"])}>
         <option value="redirect">redirect</option><option value="notify">redirect + notify</option><option value="hold">hold</option></select></label>
       <Check k="pictureCheck" label="Picture check" />

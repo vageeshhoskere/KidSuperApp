@@ -8,6 +8,12 @@ export const canFinishWizard = (s: {
   builder: ModelChoice | null; checker?: ModelChoice | null; moderation: string; moderationOffAcknowledged: boolean;
 }): boolean => !!s.builder?.model && (!s.checker || !!s.checker.model) && (s.moderation !== "off" || s.moderationOffAcknowledged);
 
+/** Confirmation text before saving cloud speech settings. */
+export const cloudWarnings = (s: { stt: string; tts: boolean; ttsProvider: string }): string[] => [
+  ...(s.stt !== "browser" ? [`Your child's voice will be sent to ${s.stt}.`] : []),
+  ...(s.tts && s.ttsProvider !== "browser" ? [`The words the app speaks will be sent to ${s.ttsProvider}.`] : []),
+];
+
 /** Picking a provider never picks a model: the parent must choose one (no "first in the list" default). */
 export const modelChoiceFor = (p: string): ModelChoice | null => (p ? { provider: p as ModelChoice["provider"], model: "" } : null);
 

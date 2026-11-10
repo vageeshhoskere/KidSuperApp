@@ -1,4 +1,5 @@
 import { transcribe, tts, type Modes } from "../api";
+import { COPY } from "../../shared/copy";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const SR = (): any => (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition;
@@ -29,12 +30,12 @@ export function startListening(modes: Modes, onText: (t: string) => void, onMess
         const r = await transcribe(new Blob(chunks, { type: mr.mimeType || "audio/webm" }));
         if (r.text) onText(r.text);
         if (r.message) onMessage(r.message);
-      } catch { /* silent: the child can simply try again */ }
+      } catch { onMessage(COPY.oops); }
     };
     mr.start();
     stopFn = () => mr.stop();
     if (stopped) stopFn();
-  }).catch(() => {});
+  }).catch(() => onMessage(COPY.oops));
   return () => { stopped = true; stopFn(); };
 }
 

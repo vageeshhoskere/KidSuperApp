@@ -15,3 +15,9 @@ export function parse<T>(schema: z.ZodType<T>, x: unknown): T {
 }
 
 export const MB = 1024 * 1024;
+
+/** Every address the child's device might reach this computer on (a laptop can have Wi-Fi and Ethernet). */
+export function lanUrls(ifaces: NodeJS.Dict<{ family: string; internal: boolean; address: string }[]>, port: number): string[] {
+  const ips = Object.values(ifaces).flat().filter((i) => i && i.family === "IPv4" && !i.internal).map((i) => i!.address);
+  return (ips.length ? ips : ["localhost"]).map((ip) => `http://${ip}:${port}`);
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canFinishWizard, modelChoiceFor, pickProviders, pinsMatch, validatePin } from "../../web/parent/forms";
+import { canFinishWizard, cloudWarnings, modelChoiceFor, pickProviders, pinsMatch, validatePin } from "../../web/parent/forms";
 
 describe("parent forms", () => {
   it("validatePin needs exactly 6 digits", () => {
@@ -33,5 +33,12 @@ describe("parent forms", () => {
     expect(pickProviders({}, { provider: "anthropic", model: "m" })).toEqual(["anthropic"]);
     expect(pickProviders({ google: ["g"] }, null)).toEqual(["google"]);
     expect(pickProviders({ openai: ["o"], anthropic: [] }, { provider: "openai", model: "o" })).toEqual(["openai"]);
+  });
+  it("cloudWarnings: voice warning for STT, spoken-words warning for TTS (minor)", () => {
+    const s = { stt: "browser", tts: false, ttsProvider: "browser" } as const;
+    expect(cloudWarnings(s)).toEqual([]);
+    expect(cloudWarnings({ ...s, stt: "openai" })).toEqual(["Your child's voice will be sent to openai."]);
+    expect(cloudWarnings({ ...s, tts: true, ttsProvider: "google" })).toEqual(["The words the app speaks will be sent to google."]);
+    expect(cloudWarnings({ ...s, tts: false, ttsProvider: "google" })).toEqual([]);
   });
 });
