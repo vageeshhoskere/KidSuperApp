@@ -1,0 +1,374 @@
+import { describe, expect, it, vi } from "vitest";
+import { openDb, type Db } from "../../server/db";
+import { createChild, updateChild, updateGlobal, type ChildSettings } from "../../server/settings";
+import { countBuildsSince, getRequest, listEvents, listHeld, listRequests, makeAuditWriter, type AuditRequest, type AuditWriter } from "../../server/audit";
+import { makeFakeProvider, type FakeProvider } from "../../server/providers/fake";
+import type { ProviderId } from "../../server/providers/types";
+import { approveHeld, BUILDER_SYSTEM_PROMPT, finishPictureCheck, rejectHeld, startBuild, type Deps } from "../../server/pipeline";
+import { makeNotify } from "../../server/notify";
+import { COPY } from "../../shared/copy";
+import { PALETTE, SHAPES, type Scene } from "../../shared/scene";
+import { SAFE_IDEAS } from "../../server/safety/ideas";
+
+const NOW = new Date(2026, 10, 10, 10, 0); // 10:00 local, inside default hours
+const v = (verdict: string) => ({ intent: "build a tower", summary: "a red tower", verdict, categories: [], reason: "ok" });
+const SCENE: Scene = {
+  title: "Red Tower",
+  blocks: [{ shape: "cube", color: "red", position: [0, 0, 0], size: [1, 1, 1], rotation: [0, 0, 0] }],
+};
+const PNG = Buffer.from("png");
+
+type Opts = {
+  verdicts?: string[]; build?: unknown[] | ((o: never) => unknown); builderFail?: "timeout" | "malformed";
+  scores?: Record<string, number>; child?: Partial<ChildSettings>; age?: number; audit?: AuditWriter;
+  notify?: Deps["notify"]; pictureTimeoutMs?: number;
+};
+
+function setup(o: Opts = {}) {
+  const db: Db = openDb(":memory:");
+  const realAudit = makeAuditWriter(db);
+  updateGlobal(db, {
+    setupComplete: true, moderation: "openai",
+    builder: { provider: "anthropic", model: "b-model" }, checker: { provider: "google", model: "c-model" },
+    smtp: { host: "h", port: 25, user: "", pass: "", from: "f@x", to: "t@x" },
+  }, realAudit);
+  const childId = createChild(db, { name: "Sam", avatar: "a", age: o.age ?? 7 });
+  updateChild(db, childId, { pictureCheck: false, ...o.child }, realAudit);
+  const verdicts = [...(o.verdicts ?? [])];
+  const mod = makeFakeProvider({ moderate: o.scores ?? { violence: 0.01 } });
+  const checker = makeFakeProvider({ json: () => v(verdicts.shift() ?? "safe") });
+  const builder = makeFakeProvider(
+    o.builderFail ? { fail: o.builderFail } : { json: (o.build as unknown[] | undefined) ?? [SCENE, SCENE, SCENE] },
+  );
+  const providers: Partial<Record<ProviderId, FakeProvider>> = { openai: mod, google: checker, anthropic: builder };
+  const notify = o.notify ?? vi.fn(async () => {});
+  const d: Deps = {
+    db, audit: o.audit ?? realAudit, registry: { get: (id) => providers[id] ?? null }, now: () => NOW,
+    notify, rand: () => 0.5, pictureTimeoutMs: o.pictureTimeoutMs,
+  };
+  return { db, d, childId, mod, checker, builder, notify };
+}
+
+const rows = (db: Db) => listRequests(db, {});
+const row = (db: Db, id?: string) => getRequest(db, id!)!;
+const creations = (db: Db) => db.prepare("SELECT * FROM creations").all() as { is_new: number; title: string; child_id: number }[];
+const input = (childId: number, text = "a red tower") => ({ childId, mode: "typed" as const, text });
+const noCalls = (...ps: FakeProvider[]) => ps.forEach((p) => expect(p.calls.generateJson + p.calls.moderate).toBe(0));
+
+describe("startBuild", () => {
+  it("happy path with picture check off returns shown and audits shown", async () => {
+    const { db, d, childId, builder } = setup();
+    const r = await startBuild(d, input(childId));
+    expect(r).toEqual({ status: "shown", requestId: expect.any(String), scene: SCENE, speak: "Here's your Red Tower!" });
+    const a = row(db, (r as { requestId: string }).requestId);
+    expect(a.outcome).toBe("shown");
+    expect(a).toMatchObject({
+      inputText: "a red tower", intent: "build a tower", summary: "a red tower", scene: SCENE,
+      layer1: { result: "pass" }, layer2: { result: "pass" }, layer3: { result: "pass" }, outputText: { result: "pass" },
+      builder: { provider: "anthropic", model: "b-model" }, checker: { provider: "google", model: "c-model" },
+    });
+    expect(a.raw.length).toBe(5); // moderation, checker, builder, output moderation, output checker
+    expect(builder.last.generateJson?.system).toBe(BUILDER_SYSTEM_PROMPT);
+    expect(builder.last.generateJson?.data).toContain("<child_data>");
+    expect(creations(db)).toHaveLength(0);
+  });
+
+  it("picture check on returns needs_picture, then finishPictureCheck pass → shown", async () => {
+    const { db, d, childId } = setup({ child: { pictureCheck: true } });
+    const r = await startBuild(d, input(childId));
+    expect(r).toMatchObject({ status: "needs_picture", scene: SCENE });
+    const id = (r as { requestId: string }).requestId;
+    expect(getRequest(db, id)).toBeNull(); // not audited until the picture comes back
+    const f = await finishPictureCheck(d, id, PNG);
+    expect(f).toMatchObject({ status: "shown", requestId: id, scene: SCENE, speak: "Here's your Red Tower!" });
+    expect(row(db, id).outcome).toBe("shown");
+    expect(row(db, id).pictureCheck).toMatchObject({ result: "pass" });
+    const again = await startBuild(d, input(childId));
+    expect(again.status).toBe("needs_picture"); // lock released
+    await finishPictureCheck(d, (again as { requestId: string }).requestId, PNG);
+  });
+
+  it("finishPictureCheck fail → redirected; unknown id → error", async () => {
+    const { db, d, childId } = setup({ child: { pictureCheck: true }, verdicts: ["safe", "safe", "unsafe"] });
+    const r = await startBuild(d, input(childId));
+    const id = (r as { requestId: string }).requestId;
+    const f = await finishPictureCheck(d, id, PNG);
+    expect(f).toMatchObject({ status: "redirected", requestId: id });
+    expect(f).not.toHaveProperty("scene");
+    expect(row(db, id).outcome).toBe("redirected");
+    expect(await finishPictureCheck(d, id, PNG)).toEqual({ status: "error", message: COPY.oops });
+    expect(rows(db)).toHaveLength(1);
+  });
+
+  it("layer1 fail → redirected", async () => {
+    const { db, d, childId, mod, checker, builder } = setup();
+    const r = await startBuild(d, input(childId, "a big gun"));
+    expect(r).toMatchObject({ status: "redirected", message: expect.stringContaining("Let's build something else!") });
+    const ideas = (r as { ideas: string[] }).ideas;
+    expect(new Set(ideas).size).toBe(3);
+    ideas.forEach((i) => expect(SAFE_IDEAS).toContain(i));
+    expect((r as { message: string }).message).toBe(`Let's build something else! How about a ${ideas[0]}?`);
+    const a = row(db, (r as { requestId: string }).requestId);
+    expect(a.outcome).toBe("redirected");
+    expect(a.layer1.result).toBe("fail");
+    noCalls(mod, checker, builder);
+  });
+
+  it("layer2 fail → redirected", async () => {
+    const { db, d, childId, checker, builder } = setup({ scores: { violence: 0.9 } });
+    const r = await startBuild(d, input(childId));
+    expect(r.status).toBe("redirected");
+    const a = row(db, (r as { requestId: string }).requestId);
+    expect(a.outcome).toBe("redirected");
+    expect(a.layer2.result).toBe("fail");
+    expect(a.intent).toBeNull();
+    noCalls(checker, builder);
+  });
+
+  it("layer3 unsure → redirected, no builder call", async () => {
+    const { db, d, childId, builder } = setup({ verdicts: ["unsure"] });
+    const r = await startBuild(d, input(childId));
+    expect(r.status).toBe("redirected");
+    const a = row(db, (r as { requestId: string }).requestId);
+    expect(a.outcome).toBe("redirected");
+    expect(a.layer3.result).toBe("fail");
+    expect(builder.calls.generateJson).toBe(0);
+  });
+
+  it("pii → COPY.pii, audit inputText masked, no provider called", async () => {
+    const { db, d, childId, mod, checker, builder } = setup();
+    const r = await startBuild(d, input(childId, "my house at 12 Oak Tree Road"));
+    expect(r).toEqual({ status: "redirected", requestId: expect.any(String), message: COPY.pii, ideas: expect.any(Array) });
+    const a = row(db, (r as { requestId: string }).requestId);
+    expect(a.outcome).toBe("redirected");
+    expect(a.inputText).toBe("my house at [address]");
+    noCalls(mod, checker, builder);
+  });
+
+  it("builder malformed → error, COPY.oops", async () => {
+    const { db, d, childId } = setup({ build: [{ title: "x", blocks: [] }] });
+    const r = await startBuild(d, input(childId));
+    expect(r).toEqual({ status: "error", requestId: expect.any(String), message: COPY.oops });
+    const a = row(db, (r as { requestId: string }).requestId);
+    expect(a.outcome).toBe("error");
+    expect(a.scene).toBeNull();
+    expect(a.errorDetail).toContain("malformed");
+  });
+
+  it("builder timeout → error", async () => {
+    const { db, d, childId } = setup({ builderFail: "timeout" });
+    const r = await startBuild(d, input(childId));
+    expect(r).toMatchObject({ status: "error", message: COPY.oops });
+    expect(row(db, (r as { requestId: string }).requestId)).toMatchObject({ outcome: "error", errorDetail: expect.stringContaining("timeout") });
+  });
+
+  it("output checker unsafe → redirected, scene not returned", async () => {
+    const { db, d, childId } = setup({ verdicts: ["safe", "unsafe"] });
+    const r = await startBuild(d, input(childId));
+    expect(r.status).toBe("redirected");
+    expect(r).not.toHaveProperty("scene");
+    const a = row(db, (r as { requestId: string }).requestId);
+    expect(a.outcome).toBe("redirected");
+    expect(a.outputText).toMatchObject({ result: "fail", detail: { layer3: { result: "fail" } } });
+  });
+
+  it("output title failing layer 1 or containing pii → redirected", async () => {
+    const bad = { ...SCENE, title: "Gun Tower" };
+    const pii = { ...SCENE, title: "Call 5551234567" };
+    const { db, d, childId } = setup({ build: [bad, pii] });
+    for (const layer of ["layer1", "pii"]) {
+      const r = await startBuild(d, input(childId));
+      expect(r.status).toBe("redirected");
+      expect(row(db, (r as { requestId: string }).requestId)).toMatchObject({
+        outcome: "redirected", outputText: { result: "fail", detail: { [layer]: { result: "fail" } } },
+      });
+    }
+  });
+
+  it("audit write failure → COPY.oops, never shown", async () => {
+    const audit: AuditWriter = { logRequest: () => { throw new Error("disk full"); }, logEvent: () => {} };
+    const { db, d, childId } = setup({ audit });
+    const r = await startBuild(d, input(childId));
+    expect(r).toMatchObject({ status: "error", message: COPY.oops });
+    expect(rows(db)).toHaveLength(0);
+  });
+
+  it("missing builder provider → error", async () => {
+    const { db, d, childId } = setup();
+    d.registry = { get: (id) => (id === "anthropic" ? null : makeFakeProvider({ moderate: { a: 0 }, json: [v("safe")] })) };
+    const r = await startBuild(d, input(childId));
+    expect(r).toMatchObject({ status: "error", message: COPY.oops });
+    expect(row(db, (r as { requestId: string }).requestId).outcome).toBe("error");
+  });
+
+  it("notify handling calls notify once; notify throwing still returns redirected", async () => {
+    const { db, d, childId, notify } = setup({ child: { flagHandling: "notify" }, verdicts: ["unsafe"] });
+    const r = await startBuild(d, input(childId));
+    expect(r.status).toBe("redirected");
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect((notify as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({ outcome: "redirected", layer3: { result: "fail" } });
+    expect(row(db, (r as { requestId: string }).requestId).outcome).toBe("redirected");
+
+    d.notify = async () => { throw new Error("smtp down"); };
+    const r2 = await startBuild(d, input(childId, "a gun"));
+    expect(r2.status).toBe("redirected");
+    expect(row(db, (r2 as { requestId: string }).requestId)).toMatchObject({ outcome: "redirected", errorDetail: "notify failed: smtp down" });
+    expect(rows(db)).toHaveLength(2);
+  });
+
+  it("gate closed → closed (setup and hours)", async () => {
+    const { db, d, childId, mod } = setup();
+    d.now = () => new Date(2026, 10, 10, 21, 0);
+    const r = await startBuild(d, input(childId));
+    expect(r).toEqual({ status: "closed", message: COPY.closed });
+    expect(rows(db)[0].outcome).toBe("closed");
+    updateGlobal(db, { setupComplete: false }, makeAuditWriter(db));
+    expect(await startBuild(d, input(childId))).toEqual({ status: "closed", message: COPY.setup });
+    noCalls(mod);
+  });
+});
+
+describe("held requests", () => {
+  it("hold handling → held; approveHeld runs builder and output checks and creates is_new creation", async () => {
+    const { db, d, childId, builder, checker } = setup({ child: { flagHandling: "hold", pictureCheck: true }, verdicts: ["unsure"] });
+    const r = await startBuild(d, input(childId, "a spooky tower"));
+    expect(r).toEqual({ status: "held", requestId: expect.any(String), message: COPY.held });
+    const heldId = (r as { requestId: string }).requestId;
+    expect(row(db, heldId).outcome).toBe("held");
+    expect(builder.calls.generateJson).toBe(0);
+    expect(listHeld(db).map((h) => h.id)).toEqual([heldId]);
+
+    const a = await approveHeld(d, heldId);
+    expect(a).toMatchObject({ status: "needs_picture", scene: SCENE });
+    const newId = (a as { requestId: string }).requestId;
+    expect(builder.calls.generateJson).toBe(1);
+    expect(listHeld(db)).toHaveLength(0);
+    expect(listEvents(db, { type: "hold_decision" })).toMatchObject([
+      { relatedRequestId: heldId, detail: { decision: "approve", newRequestId: newId } },
+    ]);
+    const checks = checker.calls.generateJson;
+    const f = await finishPictureCheck(d, newId, PNG);
+    expect(f.status).toBe("shown");
+    expect(checker.calls.generateJson).toBe(checks + 1);
+    const n = row(db, newId);
+    expect(n).toMatchObject({ outcome: "shown", inputText: "a spooky tower", layer3: { result: "fail" }, parentRequestId: heldId });
+    expect(row(db, heldId).outcome).toBe("held"); // held row untouched
+    expect(creations(db)).toMatchObject([{ child_id: childId, title: "Red Tower", is_new: 1 }]);
+    expect(await approveHeld(d, heldId)).toMatchObject({ status: "error" }); // already decided
+  });
+
+  it("approveHeld with unsafe output → redirected, no creation", async () => {
+    const { db, d, childId } = setup({ child: { flagHandling: "hold" }, verdicts: ["unsure", "unsafe"] });
+    const heldId = ((await startBuild(d, input(childId))) as { requestId: string }).requestId;
+    const a = await approveHeld(d, heldId);
+    expect(a.status).toBe("redirected");
+    expect(row(db, (a as { requestId: string }).requestId).outcome).toBe("redirected");
+    expect(creations(db)).toHaveLength(0);
+  });
+
+  it("rejectHeld logs a reject decision", async () => {
+    const { db, d, childId } = setup({ child: { flagHandling: "hold" }, verdicts: ["unsure"] });
+    const heldId = ((await startBuild(d, input(childId))) as { requestId: string }).requestId;
+    rejectHeld(d, heldId);
+    expect(row(db, heldId).outcome).toBe("held");
+    expect(listEvents(db, { type: "hold_decision" })).toMatchObject([{ relatedRequestId: heldId, detail: { decision: "reject" } }]);
+    expect(listHeld(db)).toHaveLength(0);
+    expect(() => rejectHeld(d, heldId)).toThrow();
+  });
+});
+
+describe("follow-ups and review focus", () => {
+  it("follow-up passes baseScene in builder data and records parentRequestId", async () => {
+    const { db, d, childId, builder } = setup();
+    const r = await startBuild(d, { ...input(childId, "make it taller"), baseScene: SCENE, parentRequestId: "prev-1" });
+    expect(r.status).toBe("shown");
+    expect(builder.last.generateJson?.data).toContain(JSON.stringify(SCENE));
+    expect(builder.last.generateJson?.data).toContain("make it taller");
+    expect(row(db, (r as { requestId: string }).requestId)).toMatchObject({ outcome: "shown", parentRequestId: "prev-1" });
+  });
+
+  it("rejects concurrent build for same child", async () => {
+    const { db, d, childId, mod, builder } = setup();
+    const first = startBuild(d, input(childId));
+    const second = await startBuild(d, input(childId));
+    expect(second).toEqual({ status: "busy", message: COPY.busy });
+    expect((await first).status).toBe("shown");
+    expect(rows(db)).toHaveLength(1);
+    expect(rows(db)[0].outcome).toBe("shown");
+    expect(builder.calls.generateJson).toBe(1);
+    expect(mod.calls.moderate).toBe(2); // input + output of the first build only
+  });
+
+  it("abandoned picture check is audited as error after 60s", async () => {
+    const { db, d, childId } = setup({ child: { pictureCheck: true }, pictureTimeoutMs: 20 });
+    const r = await startBuild(d, input(childId));
+    expect(r.status).toBe("needs_picture");
+    const id = (r as { requestId: string }).requestId;
+    expect((await startBuild(d, input(childId))).status).toBe("busy");
+    await new Promise((res) => setTimeout(res, 60));
+    expect(row(db, id)).toMatchObject({ outcome: "error", errorDetail: "picture check not returned" });
+    expect(countBuildsSince(db, childId, new Date(2026, 10, 10).toISOString())).toBe(1);
+    expect(await finishPictureCheck(d, id, PNG)).toMatchObject({ status: "error" });
+    const again = await startBuild(d, input(childId));
+    expect(again.status).toBe("needs_picture"); // lock released
+    await finishPictureCheck(d, (again as { requestId: string }).requestId, PNG);
+  });
+
+  it("input over 300 chars is rejected before providers", async () => {
+    const { db, d, childId, mod, checker, builder } = setup();
+    const r = await startBuild(d, input(childId, "a".repeat(301)));
+    expect(r).toEqual({ status: "redirected", requestId: expect.any(String), message: COPY.tooLong, ideas: expect.any(Array) });
+    expect(row(db, (r as { requestId: string }).requestId).outcome).toBe("redirected");
+    noCalls(mod, checker, builder);
+  });
+
+  it("whitespace input does nothing", async () => {
+    const { db, d, childId, mod, checker, builder } = setup();
+    expect(await startBuild(d, input(childId, "  \n\t "))).toEqual({ status: "empty" });
+    expect(rows(db)).toHaveLength(0);
+    expect(countBuildsSince(db, childId, "2000-01-01T00:00:00.000Z")).toBe(0);
+    noCalls(mod, checker, builder);
+  });
+
+  it("settings snapshot is taken at start", async () => {
+    const { db, d, childId, checker } = setup({ child: { pictureCheck: true }, verdicts: ["safe", "safe", "unsafe"], age: 6 });
+    const r = await startBuild(d, input(childId));
+    expect(r.status).toBe("needs_picture");
+    const id = (r as { requestId: string }).requestId;
+    updateChild(db, childId, { pictureCheck: false }, makeAuditWriter(db));
+    db.prepare("UPDATE children SET age = 12 WHERE id = ?").run(childId);
+    const f = await finishPictureCheck(d, id, PNG);
+    expect(f.status).toBe("redirected"); // picture still required and checked
+    expect(checker.last.generateJson?.system).toContain("age 6");
+    expect(row(db, id).outcome).toBe("redirected");
+  });
+});
+
+describe("BUILDER_SYSTEM_PROMPT", () => {
+  it("names every shape and colour, the limits and the data rule", () => {
+    for (const s of SHAPES) expect(BUILDER_SYSTEM_PROMPT).toContain(s);
+    for (const c of Object.keys(PALETTE)) expect(BUILDER_SYSTEM_PROMPT).toContain(c);
+    for (const n of ["200", "-20", "0.1", "360", "<child_data>"]) expect(BUILDER_SYSTEM_PROMPT).toContain(n);
+  });
+});
+
+describe("makeNotify", () => {
+  const req = { createdAt: "2026-11-10T10:00:00.000Z", inputText: "a gun", intent: "x", summary: "y",
+    layer1: { result: "fail", detail: null }, layer2: { result: "pass", detail: null }, layer3: { result: "skipped", detail: null } } as unknown as AuditRequest;
+  it("sends one mail with the subject and body fields", async () => {
+    const sent: { subject?: string; text?: string; to?: string }[] = [];
+    const opts: unknown[] = [];
+    const notify = makeNotify(() => ({ host: "smtp.x", port: 587, user: "u", pass: "p", from: "f@x", to: "t@x" }), (o) => {
+      opts.push(o);
+      return { sendMail: async (m) => { sent.push(m as never); return {}; } };
+    });
+    await notify(req);
+    expect(opts[0]).toMatchObject({ host: "smtp.x", port: 587, auth: { user: "u", pass: "p" } });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ subject: "Kid 3D Builder: a request was flagged", to: "t@x" });
+    for (const s of ["2026-11-10T10:00:00.000Z", "a gun", "layer1"]) expect(sent[0].text).toContain(s);
+  });
+  it("throws without smtp", async () => {
+    await expect(makeNotify(() => null)(req)).rejects.toThrow();
+  });
+});

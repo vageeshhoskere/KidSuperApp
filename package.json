@@ -18,12 +18,14 @@
     "@anthropic-ai/sdk": "^1.8.0",
     "@google/genai": "^3.0.0",
     "better-sqlite3": "^13.0.3",
+    "nodemailer": "^10.5.0",
     "openai": "^7.55.0",
     "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^26.6.6",
+    "@types/nodemailer": "^8.0.2",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vitest": "^5.1.0"
