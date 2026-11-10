@@ -30,9 +30,9 @@ export class ProviderError extends Error {
   }
 }
 
-// Any child_data tag inside the data is removed so the child cannot close the wrapper early.
+// Angle brackets in the data become ‹ › so no tag (nested or not) can close the wrapper early.
 export const wrapData = (data: string) =>
-  `<child_data>\n${data.replace(/<\s*\/?\s*child_data[^>]*>/gi, "")}\n</child_data>`;
+  `<child_data>\n${data.replaceAll("<", "‹").replaceAll(">", "›")}\n</child_data>`;
 
 type Json = Record<string, unknown>;
 const isObj = (x: unknown): x is Json => typeof x === "object" && x !== null && !Array.isArray(x);
