@@ -74,6 +74,19 @@ describe("audit", () => {
     expect(purgeOlderThan(db, 90, new Date())).toBe(1);
     expect(listEvents(db, { type: "pin_fail" })).toEqual([]);
   });
+  it("purge rolls back deletes if the purge event can't be written", () => {
+    const { db, w } = setup();
+    const now = new Date("2026-11-10T00:00:00.000Z");
+    w.logRequest(req({ id: "old", createdAt: daysAgo(now, 91) }));
+    db.exec("CREATE TRIGGER nopurge BEFORE INSERT ON audit_events WHEN NEW.type = 'purge' BEGIN SELECT RAISE(ABORT, 'no'); END");
+    expect(() => purgeOlderThan(db, 90, now)).toThrow();
+    expect(getRequest(db, "old")).not.toBeNull();
+  });
+  it("toCsv neutralises formula cells", () => {
+    const csv = toCsv([req({ inputText: "=1+1", summary: "@x", intent: "-2" })]);
+    expect(csv).toContain(",'=1+1,");
+    expect(csv).toContain(",'-2,'@x,");
+  });
   it("toCsv quotes commas, quotes and newlines", () => {
     const csv = toCsv([req({ inputText: 'a, "b"\nc' })]);
     const [header] = csv.split("\r\n");

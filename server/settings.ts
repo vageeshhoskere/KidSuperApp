@@ -66,6 +66,11 @@ function logChanges(audit: AuditWriter, oldS: object, patch: object, scope?: obj
   }
 }
 
+function anyChildNotifies(db: Db): boolean {
+  const rows = db.prepare("SELECT settings FROM children").all() as { settings: string }[];
+  return rows.some((r) => JSON.parse(r.settings).flagHandling === "notify");
+}
+
 export function getGlobal(db: Db): GlobalSettings {
   const out: Record<string, unknown> = { ...DEFAULT_GLOBAL_SETTINGS };
   for (const r of db.prepare("SELECT key, value FROM settings").all() as { key: string; value: string }[])
@@ -76,11 +81,13 @@ export function getGlobal(db: Db): GlobalSettings {
 export function updateGlobal(db: Db, patch: Partial<GlobalSettings>, audit: AuditWriter): void {
   const p = GlobalPatch.parse(patch);
   const old = getGlobal(db);
+  if ("smtp" in p && !p.smtp && anyChildNotifies(db)) throw new Error("smtp is needed while a child uses 'notify'");
   const put = db.prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value");
+  // write and audit atomically: if logging throws, the change rolls back
   db.transaction(() => {
     for (const [k, v] of Object.entries(p)) put.run(k, JSON.stringify(v));
+    logChanges(audit, old, p);
   })();
-  logChanges(audit, old, p);
 }
 
 type ChildRow = { id: number; name: string; avatar: string; age: number; settings: string };
@@ -104,6 +111,8 @@ export function updateChild(db: Db, childId: number, patch: Partial<ChildSetting
   const child = getChild(db, childId);
   if (!child) throw new Error(`no such child ${childId}`);
   const next = { ...child.settings, ...p };
-  db.prepare("UPDATE children SET settings = ? WHERE id = ?").run(JSON.stringify(next), childId);
-  logChanges(audit, child.settings, p, { childId });
+  db.transaction(() => {
+    db.prepare("UPDATE children SET settings = ? WHERE id = ?").run(JSON.stringify(next), childId);
+    logChanges(audit, child.settings, p, { childId });
+  })();
 }

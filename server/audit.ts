@@ -102,7 +102,8 @@ const CSV_COLS: (keyof AuditRequest)[] = [
   "builder", "checker", "outputText", "pictureCheck", "outcome", "errorDetail", "raw", "scene", "parentRequestId",
 ];
 const cell = (v: unknown): string => {
-  const s = v === null || v === undefined ? "" : typeof v === "object" ? JSON.stringify(v) : String(v);
+  let s = v === null || v === undefined ? "" : typeof v === "object" ? JSON.stringify(v) : String(v);
+  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; // spreadsheet formula injection
   return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
 export function toCsv(rows: AuditRequest[]): string {
@@ -111,9 +112,12 @@ export function toCsv(rows: AuditRequest[]): string {
 
 export function purgeOlderThan(db: Db, days: number, now: Date): number {
   const cutoff = new Date(now.getTime() - days * 86400000).toISOString();
-  const deleted = db.transaction(() =>
-    db.prepare("DELETE FROM audit_requests WHERE created_at < ?").run(cutoff).changes +
-    db.prepare("DELETE FROM audit_events WHERE created_at < ?").run(cutoff).changes)();
-  makeAuditWriter(db).logEvent("purge", { deleted });
-  return deleted;
+  // the purge event is inserted in the same transaction, so a failed log rolls the deletes back
+  return db.transaction(() => {
+    const deleted =
+      db.prepare("DELETE FROM audit_requests WHERE created_at < ?").run(cutoff).changes +
+      db.prepare("DELETE FROM audit_events WHERE created_at < ?").run(cutoff).changes;
+    makeAuditWriter(db).logEvent("purge", { deleted });
+    return deleted;
+  })();
 }

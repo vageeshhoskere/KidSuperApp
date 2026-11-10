@@ -55,4 +55,26 @@ describe("settings", () => {
     expect(getChild(db, id)!.settings).toEqual({ ...DEFAULT_CHILD_SETTINGS, flagHandling: "notify", voice: true });
     expect(audit.logEvent).toHaveBeenCalledWith("settings_change", { childId: id, key: "flagHandling", old: "redirect", new: "notify" });
   });
+  it("rolls back the change if audit logging throws", () => {
+    const { db } = setup();
+    const id = createChild(db, { name: "K", avatar: "a", age: 7 });
+    let n = 0;
+    const bad = { logRequest() {}, logEvent: () => { if (++n === 2) throw new Error("audit down"); } };
+    expect(() => updateGlobal(db, { retentionDays: 30, setupComplete: true }, bad)).toThrow("audit down");
+    expect(getGlobal(db)).toEqual(DEFAULT_GLOBAL_SETTINGS);
+    n = 1;
+    expect(() => updateChild(db, id, { voice: true }, bad)).toThrow("audit down");
+    expect(getChild(db, id)!.settings).toEqual(DEFAULT_CHILD_SETTINGS);
+  });
+  it("smtp can't be cleared while a child uses notify", () => {
+    const { db, audit } = setup();
+    const id = createChild(db, { name: "K", avatar: "a", age: 7 });
+    updateGlobal(db, { smtp }, audit);
+    updateChild(db, id, { flagHandling: "notify" }, audit);
+    expect(() => updateGlobal(db, { smtp: null }, audit)).toThrow();
+    expect(getGlobal(db).smtp).not.toBeNull();
+    updateChild(db, id, { flagHandling: "redirect" }, audit);
+    updateGlobal(db, { smtp: null }, audit);
+    expect(getGlobal(db).smtp).toBeNull();
+  });
 });
