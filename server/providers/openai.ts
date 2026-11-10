@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 import type { ChatCompletionContentPart } from "openai/resources/chat/completions";
-import { guard, jsonSchemaOf, LIST_TIMEOUT_MS, parseReply, wrapData, type Provider } from "./types";
+import { guard, jsonSchemaOf, LIST_TIMEOUT_MS, parseReply, parseScores, ProviderError, wrapData, type Provider } from "./types";
 
 export function makeOpenAI(key: string, fetchImpl: typeof fetch = fetch): Provider {
   const client = new OpenAI({ apiKey: key, fetch: fetchImpl, maxRetries: 0 });
@@ -33,15 +33,15 @@ export function makeOpenAI(key: string, fetchImpl: typeof fetch = fetch): Provid
           },
           { signal },
         );
-        return parseReply(o.schema, r.choices[0]?.message.content);
+        const msg = r.choices[0]?.message;
+        if (msg?.refusal) throw new ProviderError("error", `model refused: ${msg.refusal}`);
+        return parseReply(o.schema, msg?.content);
       }),
 
     moderate: (text, timeoutMs) =>
       guard(timeoutMs, key, async (signal) => {
         const r = await client.moderations.create({ input: text }, { signal });
-        const scores = r.results[0]?.category_scores as unknown as Record<string, number> | undefined;
-        if (!scores) throw new Error("moderation reply has no results");
-        return { scores, raw: JSON.stringify(r) };
+        return { scores: parseScores(r.results[0]?.category_scores), raw: JSON.stringify(r) };
       }),
 
     transcribe: (audio, mime, timeoutMs, model) =>

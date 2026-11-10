@@ -1,5 +1,5 @@
 import { GoogleGenAI, type Part } from "@google/genai";
-import { guard, jsonSchemaOf, LIST_TIMEOUT_MS, parseReply, wrapData, type Provider } from "./types";
+import { guard, parseScores, ProviderError, jsonSchemaOf, LIST_TIMEOUT_MS, parseReply, wrapData, type Provider } from "./types";
 
 const MODERATE_URL = "https://language.googleapis.com/v2/documents:moderateText";
 
@@ -39,9 +39,11 @@ export function makeGoogle(key: string, fetchImpl: typeof fetch = fetch): Provid
             systemInstruction: o.system,
             temperature: 0,
             responseMimeType: "application/json",
-            responseJsonSchema: jsonSchemaOf(o.schema),
+            responseJsonSchema: jsonSchemaOf(o.schema, ["pattern", "maxLength"]),
           },
         });
+        const block = r.promptFeedback?.blockReason;
+        if (block || !r.candidates?.length) throw new ProviderError("error", `blocked: ${block ?? "no candidates"}`);
         return parseReply(o.schema, r.text);
       }),
 
@@ -56,9 +58,11 @@ export function makeGoogle(key: string, fetchImpl: typeof fetch = fetch): Provid
         });
         const raw = await res.text();
         if (!res.ok) throw new Error(`moderateText HTTP ${res.status}: ${raw.slice(0, 500)}`);
-        const cats = (JSON.parse(raw) as { moderationCategories?: { name: string; confidence: number }[] }).moderationCategories;
-        if (!Array.isArray(cats)) throw new Error("moderateText reply has no moderationCategories");
-        return { scores: Object.fromEntries(cats.map((c) => [c.name, Number(c.confidence)])), raw };
+        let cats: unknown;
+        try { cats = JSON.parse(raw).moderationCategories; } catch { throw new ProviderError("malformed", "moderateText reply is not JSON"); }
+        if (!Array.isArray(cats)) throw new ProviderError("malformed", "moderateText reply has no moderationCategories");
+        // proto3 JSON omits zero values, so a missing confidence means 0.
+        return { scores: parseScores(Object.fromEntries(cats.map((c) => [c?.name, c?.confidence ?? 0]))), raw };
       }),
 
     transcribe: (audio, mime, timeoutMs, model) =>

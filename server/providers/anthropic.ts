@@ -1,8 +1,9 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { guard, jsonSchemaOf, LIST_TIMEOUT_MS, parseReply, wrapData, type Provider } from "./types";
+import { transformJSONSchema } from "@anthropic-ai/sdk/lib/transform-json-schema";
+import { guard, ProviderError, jsonSchemaOf, LIST_TIMEOUT_MS, parseReply, wrapData, type Provider } from "./types";
 
-// Structured output via output_config.format, not a forced tool: current Claude models reject
-// forced tool_choice and the SDK's API version (2026-10-21) rejects temperature, so none is sent.
+// Structured output via output_config.format follows current Anthropic API guidance (forced
+// tool_choice is rejected by current models). The SDK's request type has no temperature field.
 export function makeAnthropic(key: string, fetchImpl: typeof fetch = fetch): Provider {
   const client = new Anthropic({ apiKey: key, fetch: fetchImpl, maxRetries: 0 });
   return {
@@ -26,11 +27,11 @@ export function makeAnthropic(key: string, fetchImpl: typeof fetch = fetch): Pro
             max_tokens: 16000,
             system: o.system,
             messages: [{ role: "user", content }],
-            output_config: { format: { type: "json_schema", schema: jsonSchemaOf(o.schema) } },
+            output_config: { format: { type: "json_schema", schema: transformJSONSchema(jsonSchemaOf(o.schema)) } },
           },
           { signal },
         );
-        if (r.stop_reason === "refusal") throw new Error("model refused");
+        if (r.stop_reason === "refusal") throw new ProviderError("error", "model refused");
         const text = r.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("");
         return parseReply(o.schema, text);
       }),
