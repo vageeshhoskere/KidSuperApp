@@ -22,3 +22,11 @@ export function buildMesh(b: Block): THREE.Mesh {
   m.rotation.set(...(b.rotation.map(THREE.MathUtils.degToRad) as [number, number, number]));
   return m;
 }
+
+/** Frees GPU resources of meshes built by buildMesh. */
+export function disposeMeshes(meshes: THREE.Mesh[]) {
+  for (const m of meshes) {
+    m.geometry.dispose();
+    (Array.isArray(m.material) ? m.material : [m.material]).forEach((x) => x.dispose());
+  }
+}

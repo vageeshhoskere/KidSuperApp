@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Modes } from "../api";
 import { micSupported, startListening } from "./speech";
 
@@ -6,6 +6,7 @@ import { micSupported, startListening } from "./speech";
 export default function MicButton({ modes, onText, onMessage }: { modes: Modes; onText: (t: string) => void; onMessage: (m: string) => void }) {
   const stop = useRef<(() => void) | null>(null);
   const [on, setOn] = useState(false);
+  useEffect(() => () => stop.current?.(), []);
   if (!modes.voice || !micSupported(modes)) return null;
   const begin = () => { if (!stop.current) { setOn(true); stop.current = startListening(modes, onText, onMessage); } };
   const end = () => { stop.current?.(); stop.current = null; setOn(false); };

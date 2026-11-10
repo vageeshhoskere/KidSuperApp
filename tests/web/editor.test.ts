@@ -53,3 +53,13 @@ describe("static", () => {
     for (const f of fs.readdirSync(dir)) expect(fs.readFileSync(path.join(dir, f), "utf8"), f).not.toContain('href="http');
   });
 });
+
+import { inferMode } from "../../web/child/mode";
+describe("inferMode", () => {
+  it("follows the brief", () => {
+    expect(inferMode({ voice: true, pictures: true, typed: true })).toBe("voice");
+    expect(inferMode({ voice: false, pictures: true, typed: false })).toBe("pictures");
+    expect(inferMode({ voice: false, pictures: true, typed: true })).toBe("typed");
+    expect(inferMode({ voice: false, pictures: false, typed: false })).toBe("typed");
+  });
+});

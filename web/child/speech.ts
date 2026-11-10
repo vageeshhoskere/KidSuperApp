@@ -11,14 +11,16 @@ export function startListening(modes: Modes, onText: (t: string) => void, onMess
   if (modes.stt === "browser") {
     const rec = new (SR())();
     rec.interimResults = true;
+    rec.onerror = () => { try { rec.stop(); } catch { /* already stopped */ } };
     rec.onresult = (e: any) => onText(Array.from(e.results as ArrayLike<any>).map((r) => r[0].transcript).join(""));
-    rec.start();
-    return () => rec.stop();
+    try { rec.start(); } catch { return () => {}; }
+    return () => { try { rec.stop(); } catch { /* already stopped */ } };
   }
   let stopFn = () => {};
   let stopped = false;
   navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
-    const mr = new MediaRecorder(stream);
+    let mr: MediaRecorder;
+    try { mr = new MediaRecorder(stream); } catch { stream.getTracks().forEach((t) => t.stop()); return; }
     const chunks: Blob[] = [];
     mr.ondataavailable = (e) => chunks.push(e.data);
     mr.onstop = async () => {

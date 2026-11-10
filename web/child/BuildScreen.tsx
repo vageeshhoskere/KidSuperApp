@@ -5,6 +5,7 @@ import type { Scene } from "../../shared/scene";
 import { COPY } from "../../shared/copy";
 import { editorReducer } from "./editor";
 import { renderSnapshot } from "./snapshot";
+import { inferMode, NO_FLAGS, type Flags } from "./mode";
 import { say } from "./speech";
 import Viewer from "./Viewer";
 import EditTools from "./EditTools";
@@ -45,15 +46,16 @@ export default function BuildScreen({ modes }: { modes: Modes }) {
   const [ideas, setIdeas] = useState<string[]>([]);
   const [shown, setShown] = useState<Shown | null>(null);
   const [gallery, setGallery] = useState(false);
-  const used = useRef({ voice: false, pictures: false });
+  const used = useRef<Flags>(NO_FLAGS);
   const keyN = useRef(0);
 
   const show = (scene: Scene, requestId?: string) => setShown({ scene, requestId, key: ++keyN.current });
 
-  const handle = async (r: BuildResult): Promise<void> => {
+  const handle = async (r: BuildResult, depth = 0): Promise<void> => {
     switch (r.status) {
       case "needs_picture":
-        return handle(await sendPicture(r.requestId, await renderSnapshot(r.scene)));
+        if (depth > 0) return setMessage(COPY.oops);
+        return handle(await sendPicture(r.requestId, await renderSnapshot(r.scene)), 1);
       case "shown":
         show(r.scene, r.requestId);
         if (modes.tts) void say(r.speak, modes);
@@ -66,16 +68,16 @@ export default function BuildScreen({ modes }: { modes: Modes }) {
 
   const go = async (base?: { scene: Scene; requestId?: string }) => {
     if (busy) return;
-    const mode = used.current.voice ? "voice" : used.current.pictures ? "pictures" : "typed";
+    const mode = inferMode(used.current);
     setBusy(true); setMessage(""); setIdeas([]);
-    if (base) setShown(null); // keep the viewer hidden while the picture check runs
     try {
       await handle(await build({ mode, text, baseScene: base?.scene, parentRequestId: base?.requestId }));
     } catch { setMessage(COPY.oops); }
+    used.current = NO_FLAGS;
     setBusy(false);
   };
 
-  const edit = (t: string) => { setText(t); if (!t) used.current = { voice: false, pictures: false }; };
+  const edit = (t: string) => { setText(t); if (!t) used.current = NO_FLAGS; };
 
   if (gallery)
     return <Gallery onBack={() => setGallery(false)} onOpen={(c: Creation) => { show(c.scene); setGallery(false); }} />;
@@ -86,19 +88,19 @@ export default function BuildScreen({ modes }: { modes: Modes }) {
         <button className="big" aria-label="My things" onClick={() => setGallery(true)}>🖼 My things</button>
       </div>
       {modes.typing && (
-        <input className="text" aria-label="What do you want to build?" maxLength={300} value={text} onChange={(e) => { used.current = { voice: false, pictures: false }; edit(e.target.value); }} />
+        <input className="text" aria-label="What do you want to build?" maxLength={300} value={text} onChange={(e) => { used.current = { ...used.current, typed: true }; edit(e.target.value); }} />
       )}
       {!modes.typing && text && <p className="msg">{text}</p>}
       <div className="row">
-        <MicButton modes={modes} onText={(t) => { used.current.voice = true; setText(t); }} onMessage={setMessage} />
+        <MicButton modes={modes} onText={(t) => { used.current = { ...used.current, voice: true }; setText(t); }} onMessage={setMessage} />
         <button className="big go" disabled={busy || !text.trim()} onClick={() => go()}>🔨 Build!</button>
       </div>
-      {modes.pictures && <PictureButtons onPick={(w) => { used.current.pictures = true; setText((t) => (t ? t + " " : "") + w); }} />}
+      {modes.pictures && <PictureButtons onPick={(w) => { used.current = { ...used.current, pictures: true }; setText((t) => (t ? t + " " : "") + w); }} />}
       {busy && <p className="msg" aria-live="polite">{COPY.busy}</p>}
       {message && <p className="msg" role="status">{message}</p>}
       {ideas.length > 0 && (
         <div className="row">
-          {ideas.map((i) => <button key={i} className="big" onClick={() => { used.current = { voice: false, pictures: false }; setText(i); }}>{i}</button>)}
+          {ideas.map((i) => <button key={i} className="big" onClick={() => { used.current = { ...NO_FLAGS, typed: true }; setText(i); }}>{i}</button>)}
         </div>
       )}
       {shown && <Workspace key={shown.key} shown={shown} busy={busy} onChange={(scene, requestId) => go({ scene, requestId })} onSaveError={() => setMessage(COPY.oops)} />}

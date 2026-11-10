@@ -1,9 +1,9 @@
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import type { MeshStandardMaterial } from "three";
 import { Canvas } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
 import type { Scene } from "../../shared/scene";
-import { buildMesh } from "./meshes";
+import { buildMesh, disposeMeshes } from "./meshes";
 
 function Block({ block, selected, onSelect }: { block: Scene["blocks"][number]; selected: boolean; onSelect: () => void }) {
   const mesh = useMemo(() => {
@@ -11,6 +11,7 @@ function Block({ block, selected, onSelect }: { block: Scene["blocks"][number]; 
     if (selected) (m.material as MeshStandardMaterial).emissive.set("#ffffff").multiplyScalar(0.45);
     return m;
   }, [block, selected]);
+  useEffect(() => () => disposeMeshes([mesh]), [mesh]);
   return <primitive object={mesh} onClick={(e: { stopPropagation(): void }) => { e.stopPropagation(); onSelect(); }} />;
 }
 
