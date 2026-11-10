@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
 import fs from "node:fs";
-import { openDb } from "../../server/db";
+import os from "node:os";
+import path from "node:path";
+import Database from "better-sqlite3";
+import { openDb, restrictDataPerms } from "../../server/db";
 import { createChild } from "../../server/settings";
 import {
   makeAuditWriter, listRequests, getRequest, listEvents, listHeld, countBuildsSince,
@@ -14,7 +17,7 @@ const req = (o: Partial<AuditRequest> = {}): AuditRequest => ({
   intent: "build", summary: "cube", builder: { provider: "openai", model: "m" }, checker: { provider: "google", model: "c" },
   outputText: ok, pictureCheck: { result: "fail", detail: "x" }, outcome: "shown", errorDetail: null,
   raw: ["r1", "r2"], scene: { title: "Cube", blocks: [{ shape: "cube", color: "red", position: [0, 0, 0], size: [1, 1, 1], rotation: [0, 0, 0] }] },
-  parentRequestId: "p1", ...o,
+  parentRequestId: "p1", source: "child", baseScene: null, ...o,
 });
 const setup = () => { const db = openDb(":memory:"); return { db, w: makeAuditWriter(db) }; };
 const daysAgo = (now: Date, d: number) => new Date(now.getTime() - d * 86400000).toISOString();
@@ -106,5 +109,60 @@ describe("audit", () => {
     const outside = src.slice(0, i) + src.slice(j);
     expect(outside).not.toMatch(/UPDATE|DELETE/);
     expect(src.slice(i, j)).toMatch(/DELETE/);
+  });
+});
+
+describe("audit source and base scene (final review #2, held baseScene)", () => {
+  it("round-trips source and baseScene", () => {
+    const { db, w } = setup();
+    const a = req({ source: "redteam", baseScene: req().scene });
+    w.logRequest(a);
+    expect(getRequest(db, a.id)).toEqual(a);
+  });
+  it("countBuildsSince counts only child builds that were not closed or error", () => {
+    const { db, w } = setup();
+    const since = "2026-10-01T00:00:00.000Z";
+    w.logRequest(req({ outcome: "shown" }));
+    w.logRequest(req({ outcome: "redirected" }));
+    w.logRequest(req({ outcome: "held" }));
+    w.logRequest(req({ outcome: "error" }));
+    w.logRequest(req({ outcome: "closed" }));
+    w.logRequest(req({ outcome: "shown", source: "redteam" }));
+    w.logRequest(req({ outcome: "shown", source: "test" }));
+    expect(countBuildsSince(db, 1, since)).toBe(3);
+  });
+  it("CSV has a source column", () => {
+    const csv = toCsv([req({ source: "test" })]);
+    const [header, line] = csv.split("\r\n");
+    expect(header.endsWith(",source,baseScene")).toBe(true);
+    expect(line.endsWith(",test,")).toBe(true); // source, then the empty baseScene
+  });
+  it("an old db file without the new columns is upgraded with source default 'child'", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "audit-mig-"));
+    const file = path.join(dir, "app.db");
+    const old = new Database(file);
+    old.exec(`CREATE TABLE audit_requests (
+      id TEXT PRIMARY KEY, created_at TEXT NOT NULL, child_id INTEGER NOT NULL, input_mode TEXT NOT NULL, input_text TEXT NOT NULL,
+      layer1 TEXT NOT NULL, layer2 TEXT NOT NULL, layer3 TEXT NOT NULL, intent TEXT, summary TEXT, builder TEXT, checker TEXT,
+      output_text TEXT, picture_check TEXT, outcome TEXT NOT NULL, error_detail TEXT, raw TEXT NOT NULL, scene TEXT, parent_request_id TEXT);
+      INSERT INTO audit_requests VALUES ('old', '2026-11-10T00:00:00.000Z', 1, 'typed', 'x', '{}', '{}', '{}', null, null, null, null, null, null, 'shown', null, '[]', null, null);`);
+    old.close();
+    const db = openDb(file);
+    expect(getRequest(db, "old")).toMatchObject({ source: "child", baseScene: null });
+    expect(countBuildsSince(db, 1, "2026-01-01T00:00:00.000Z")).toBe(1);
+    db.close();
+    expect(() => openDb(file).close()).not.toThrow(); // migration is idempotent
+  });
+});
+
+describe("restrictDataPerms (final review minor: app.db permissions)", () => {
+  it("sets the data dir to 0700 and app.db (+wal/shm) to 0600", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "perms-"));
+    fs.chmodSync(dir, 0o755);
+    for (const f of ["app.db", "app.db-wal"]) fs.writeFileSync(path.join(dir, f), "", { mode: 0o644 });
+    restrictDataPerms(dir);
+    expect(fs.statSync(dir).mode & 0o777).toBe(0o700);
+    for (const f of ["app.db", "app.db-wal"]) expect(fs.statSync(path.join(dir, f)).mode & 0o777).toBe(0o600);
+    expect(fs.existsSync(path.join(dir, "app.db-shm"))).toBe(false); // missing files are skipped, not created
   });
 });

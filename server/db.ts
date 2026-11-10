@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import Database from "better-sqlite3";
 
 export type Db = Database.Database;
@@ -28,5 +30,18 @@ export function openDb(path: string): Db {
   if (path !== ":memory:") db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   db.exec(SCHEMA);
+  // upgrade db files created before these columns existed
+  const cols = (db.prepare("PRAGMA table_info(audit_requests)").all() as { name: string }[]).map((c) => c.name);
+  if (!cols.includes("source")) db.exec("ALTER TABLE audit_requests ADD COLUMN source TEXT NOT NULL DEFAULT 'child'");
+  if (!cols.includes("base_scene")) db.exec("ALTER TABLE audit_requests ADD COLUMN base_scene TEXT");
   return db;
+}
+
+/** The data folder holds keys, PIN hash and the audit log: owner-only. */
+export function restrictDataPerms(dir: string): void {
+  fs.chmodSync(dir, 0o700);
+  for (const f of ["app.db", "app.db-wal", "app.db-shm"]) {
+    const p = path.join(dir, f);
+    if (fs.existsSync(p)) fs.chmodSync(p, 0o600);
+  }
 }

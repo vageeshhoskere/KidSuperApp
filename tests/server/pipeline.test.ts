@@ -393,7 +393,8 @@ describe("follow-ups and review focus", () => {
     expect((await startBuild(d, input(childId))).status).toBe("busy");
     await new Promise((res) => setTimeout(res, 60));
     expect(row(db, id)).toMatchObject({ outcome: "error", errorDetail: "picture check not returned" });
-    expect(countBuildsSince(db, childId, new Date(2026, 10, 10).toISOString())).toBe(1);
+    // R25 (final wave) supersedes "counts towards the limit": error rows never use up the child's day
+    expect(countBuildsSince(db, childId, new Date(2026, 10, 10).toISOString())).toBe(0);
     expect(await finishPictureCheck(d, id, PNG)).toMatchObject({ status: "error" });
     const again = await startBuild(d, input(childId));
     expect(again.status).toBe("needs_picture"); // lock released
@@ -456,5 +457,38 @@ describe("makeNotify", () => {
   });
   it("throws without smtp", async () => {
     await expect(makeNotify(() => null)(req)).rejects.toThrow();
+  });
+});
+
+describe("final review fixes: source, limit, held baseScene", () => {
+  it("source defaults to child and a code-only source is recorded", async () => {
+    const { db, d, childId } = setup();
+    const a = await startBuild(d, input(childId));
+    const b = await startBuild(d, { ...input(childId), source: "redteam" });
+    expect(row(db, (a as { requestId: string }).requestId).source).toBe("child");
+    expect(row(db, (b as { requestId: string }).requestId).source).toBe("redteam");
+  });
+
+  it("red-team, test and error builds do not use up the child's daily limit", async () => {
+    const { d, childId } = setup({ child: { buildsPerDay: 1 }, build: [SCENE, SCENE, SCENE, { nope: 1 }, SCENE] });
+    expect((await startBuild(d, { ...input(childId), source: "redteam" })).status).toBe("shown");
+    expect((await startBuild(d, { ...input(childId), source: "test" })).status).toBe("shown");
+    expect((await startBuild(d, input(childId))).status).toBe("shown"); // first child build of the day
+    expect((await startBuild(d, input(childId))).status).toBe("closed"); // limit 1 reached
+  });
+
+  it("an error build does not count towards the limit", async () => {
+    const { d, childId } = setup({ child: { buildsPerDay: 1 }, build: [{ nope: 1 }, SCENE] });
+    expect((await startBuild(d, input(childId))).status).toBe("error");
+    expect((await startBuild(d, input(childId))).status).toBe("shown");
+  });
+
+  it("approving a held follow-up passes its baseScene to the builder", async () => {
+    const { db, d, childId, builder } = setup({ child: { flagHandling: "hold" }, verdicts: ["unsure"] });
+    const base: Scene = { ...SCENE, title: "Blue Base" };
+    const heldId = ((await startBuild(d, { ...input(childId, "make it taller"), baseScene: base })) as { requestId: string }).requestId;
+    expect(row(db, heldId).baseScene).toEqual(base);
+    expect((await approveHeld(d, heldId)).status).toBe("shown");
+    expect(builder.last.generateJson?.data).toContain(JSON.stringify(base));
   });
 });

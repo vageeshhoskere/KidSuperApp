@@ -38,6 +38,13 @@ const asBadRequest = (fn: () => void) => {
 export function parentRoutes(app: FastifyInstance, ctx: Ctx) {
   const { db, deps } = ctx;
 
+  /** Creates a child and audits it; call inside a transaction when other writes must roll back with it. */
+  const addChild = (c: z.infer<typeof ChildBody>) => {
+    const childId = createChild(db, c);
+    deps.audit.logEvent("child_created", { childId, name: c.name });
+    return childId;
+  };
+
   const startSession = (reply: FastifyReply, token: string) =>
     // secure: false — plain HTTP on the home LAN, so a Secure cookie would never be sent
     reply.setCookie("ps", token, { httpOnly: true, sameSite: "strict", path: "/", secure: false });
@@ -63,7 +70,7 @@ export function parentRoutes(app: FastifyInstance, ctx: Ctx) {
     const pinHash = hashPin(b.pin);
     const childId = db.transaction(() => {
       updateGlobal(db, { pinHash }, deps.audit);
-      return createChild(db, b.child);
+      return addChild(b.child);
     })();
     const r = login(db, deps.audit, b.pin, ctx.now());
     if (!r.ok) throw new Error("login after setup failed");
@@ -98,6 +105,14 @@ export function parentRoutes(app: FastifyInstance, ctx: Ctx) {
     const next = { ...old, ...patch };
     if (next.setupComplete && !(next.builder && (next.moderation !== "off" || next.moderationOffAcknowledged)))
       throw new HttpError(400, "setup needs a builder and a moderation choice");
+    if (next.setupComplete) {
+      const need: [string | null, string][] = [
+        [next.builder!.provider, "builder"], [(next.checker ?? next.builder)!.provider, "checker"],
+        [next.moderation === "off" ? null : next.moderation, "moderation"],
+      ];
+      for (const [p, role] of need)
+        if (p && !ctx.registry().get(p as (typeof PROVIDERS)[number])) throw new HttpError(400, `no API key for ${p} (${role})`);
+    }
     asBadRequest(() => updateGlobal(db, patch, deps.audit));
     return { ok: true };
   });
@@ -115,7 +130,10 @@ export function parentRoutes(app: FastifyInstance, ctx: Ctx) {
     return { ok: true };
   });
 
-  app.post("/api/parent/children", async (req) => ({ id: createChild(db, parse(ChildBody, req.body)) }));
+  app.post("/api/parent/children", async (req) => {
+    const c = parse(ChildBody, req.body);
+    return { id: db.transaction(() => addChild(c))() };
+  });
 
   app.get("/api/parent/keys", async () => {
     const keys = readKeys(ctx.dataDir);
@@ -124,6 +142,8 @@ export function parentRoutes(app: FastifyInstance, ctx: Ctx) {
 
   app.put("/api/parent/keys/:provider", async (req) => {
     const { provider } = parse(ProviderParam, req.params);
+    // the injected fake registry would keep serving, so a saved real key would look active but never be used
+    if (ctx.fakeProviders) throw new HttpError(409, "fake providers active");
     // R19: at least 20 chars, so the 4-char mask never reveals a whole key
     const { key } = parse(z.strictObject({ key: z.string().trim().min(20).max(500).nullable() }), req.body);
     const old = readKeys(ctx.dataDir)[provider];

@@ -32,12 +32,13 @@ const prompts: Entry[] = JSON.parse(fs.readFileSync(new URL("./redteam-prompts.j
 
 // Settings are overridden per build through settingsOverride: picture check off (nothing renders it here), no
 // daily limit (prompt count + the day's builds so far), open all day, flag handling "redirect" (never email).
-// Nothing is written to the settings, so a crash leaves them untouched. The builds themselves are audited as usual.
+// Nothing is written to the settings, so a crash leaves them untouched. The builds are audited with source "redteam",
+// which never counts towards the child's daily limit.
 const override = { pictureCheck: false, buildsPerDay: prompts.length + 500, hoursStart: "00:00", hoursEnd: "23:59", flagHandling: "redirect" as const };
 
 const rows: Row[] = [];
 for (const e of prompts) {
-  const r = await startBuild(deps, { childId: row.id, mode: "typed", text: e.prompt, settingsOverride: override });
+  const r = await startBuild(deps, { childId: row.id, mode: "typed", text: e.prompt, settingsOverride: override, source: "redteam" });
   rows.push(evaluate(e, r.status));
 }
 

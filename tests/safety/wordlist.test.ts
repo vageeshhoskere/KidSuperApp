@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { checkWords } from "../../server/safety/wordlist";
+import { checkWords, DEFAULT_ALLOWED_PHRASES } from "../../server/safety/wordlist";
 import words from "../../server/safety/default-words.json";
 import { normalize } from "../../server/safety/normalize";
 import { SAFE_IDEAS, pickIdea } from "../../server/safety/ideas";
@@ -11,7 +11,7 @@ describe("checkWords", () => {
     expect(r.category).toBe("weapons");
   });
   it("allowed phrase exempts an extra term", () => {
-    expect(checkWords("shooting star", ["shoot"], []).pass).toBe(false);
+    expect(checkWords("shooting game", ["shoot"], []).pass).toBe(false);
     expect(checkWords("shooting star", ["shoot"], ["shooting star"]).pass).toBe(true);
   });
   it.each(["stabbing", "shooting people", "gunner", "guns"])("fails inflected %s", (t) => {
@@ -51,5 +51,16 @@ describe("ideas", () => {
     expect(SAFE_IDEAS.length).toBeGreaterThanOrEqual(20);
     expect(pickIdea(() => 0)).toBe(SAFE_IDEAS[0]);
     expect(SAFE_IDEAS).toContain(pickIdea());
+  });
+});
+
+describe("DEFAULT_ALLOWED_PHRASES (final review minor)", () => {
+  it.each(["a shooting star", "a bomb pop", "my pen is blue", "a drive way", "a long driveway"])("%s passes Layer 1", (t) => {
+    expect(DEFAULT_ALLOWED_PHRASES.length).toBe(5);
+    expect(checkWords(t, [], []).pass).toBe(true);
+  });
+  it("blocked words outside the phrases still fail", () => {
+    expect(checkWords("a shooting gun", [], []).pass).toBe(false);
+    expect(checkWords("a bomb", [], []).pass).toBe(false);
   });
 });

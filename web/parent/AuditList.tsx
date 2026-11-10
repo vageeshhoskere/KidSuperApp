@@ -34,7 +34,7 @@ export default function AuditList() {
       <ul className="rows">
         {rows.map((r) => (
           <li key={r.id} className={r.outcome === "shown" ? "" : "bad"}>
-            <button onClick={() => setOpen(r.id)}>{new Date(r.createdAt).toLocaleString()} · {r.outcome} · {r.inputText.slice(0, 60)}</button>
+            <button onClick={() => setOpen(r.id)}>{new Date(r.createdAt).toLocaleString()} · {r.outcome}{r.source !== "child" && ` · ${r.source}`} · {r.inputText.slice(0, 60)}</button>
           </li>))}
         {rows.length === 0 && <li>Nothing here.</li>}
       </ul>

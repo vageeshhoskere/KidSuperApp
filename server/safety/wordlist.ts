@@ -10,9 +10,12 @@ const DEFAULTS: [string, string][] = Object.entries(words as Record<string, stri
 const termRegex = (squashed: string) =>
   new RegExp(`(?<![a-z0-9])${[...squashed].join(" ?")}(?:${squashed.at(-1)})?(?:s|es|ed|ing|er|ers|y)?(?![a-z0-9])`);
 
+/** Ordinary kid phrases that contain a blocked term; always allowed in addition to the child's own list. */
+export const DEFAULT_ALLOWED_PHRASES = ["shooting star", "bomb pop", "pen is", "drive way", "driveway"];
+
 export function checkWords(text: string, extra: string[], allowed: string[]): { pass: boolean; matched: string[]; category?: string } {
   let spaced = ` ${normalize(text).spaced} `;
-  for (const a of allowed) {
+  for (const a of [...DEFAULT_ALLOWED_PHRASES, ...allowed]) {
     const as = normalize(a).spaced;
     if (as) spaced = spaced.split(` ${as} `).join("  ");
   }

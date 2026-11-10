@@ -12,8 +12,13 @@ export type AuditRequest = {
   outputText: LayerResult | null; pictureCheck: LayerResult | null;
   outcome: "shown" | "redirected" | "held" | "closed" | "error"; errorDetail: string | null;
   raw: string[]; scene: Scene | null; parentRequestId: string | null;
+  /** R25: who asked. Only "child" builds count towards the daily limit. */
+  source: "child" | "redteam" | "test";
+  /** the scene a follow-up modifies, so approving a held follow-up can still use it */
+  baseScene: Scene | null;
 };
-export type AuditEventType = "settings_change" | "pin_success" | "pin_fail" | "hold_decision" | "purge";
+export type AuditEventType =
+  "settings_change" | "pin_success" | "pin_fail" | "hold_decision" | "purge" | "child_created" | "stt_blocked";
 export type AuditWriter = {
   logRequest(r: AuditRequest): void;
   logEvent(type: AuditEventType, detail: unknown, relatedRequestId?: string, now?: Date): void;
@@ -25,15 +30,15 @@ const P = <T>(s: string | null): T | null => (s === null ? null : (JSON.parse(s)
 export function makeAuditWriter(db: Db): AuditWriter {
   const insReq = db.prepare(`INSERT INTO audit_requests
     (id, created_at, child_id, input_mode, input_text, layer1, layer2, layer3, intent, summary, builder, checker,
-     output_text, picture_check, outcome, error_detail, raw, scene, parent_request_id)
+     output_text, picture_check, outcome, error_detail, raw, scene, parent_request_id, source, base_scene)
     VALUES (@id, @createdAt, @childId, @inputMode, @inputText, @layer1, @layer2, @layer3, @intent, @summary, @builder, @checker,
-     @outputText, @pictureCheck, @outcome, @errorDetail, @raw, @scene, @parentRequestId)`);
+     @outputText, @pictureCheck, @outcome, @errorDetail, @raw, @scene, @parentRequestId, @source, @baseScene)`);
   const insEvt = db.prepare("INSERT INTO audit_events (created_at, type, related_request_id, detail) VALUES (?, ?, ?, ?)");
   return {
     logRequest: (r) =>
       void insReq.run({
         ...r, layer1: J(r.layer1), layer2: J(r.layer2), layer3: J(r.layer3), builder: J(r.builder), checker: J(r.checker),
-        outputText: J(r.outputText), pictureCheck: J(r.pictureCheck), raw: J(r.raw), scene: J(r.scene),
+        outputText: J(r.outputText), pictureCheck: J(r.pictureCheck), raw: J(r.raw), scene: J(r.scene), baseScene: J(r.baseScene),
       }),
     logEvent: (type, detail, related, now) =>
       void insEvt.run((now ?? new Date()).toISOString(), type, related ?? null, JSON.stringify(detail ?? null)),
@@ -50,6 +55,7 @@ const fromRow = (r: ReqRow): AuditRequest => ({
   outputText: P(r.output_text as string | null), pictureCheck: P(r.picture_check as string | null),
   outcome: r.outcome as AuditRequest["outcome"], errorDetail: r.error_detail as string | null,
   raw: P<string[]>(r.raw as string)!, scene: P(r.scene as string | null), parentRequestId: r.parent_request_id as string | null,
+  source: r.source as AuditRequest["source"], baseScene: P(r.base_scene as string | null),
 });
 
 export function listRequests(
@@ -92,14 +98,16 @@ export function listHeld(db: Db): AuditRequest[] {
 }
 
 export function countBuildsSince(db: Db, childId: number, sinceIso: string): number {
-  const r = db.prepare("SELECT count(*) c FROM audit_requests WHERE child_id = ? AND created_at >= ? AND outcome != 'closed'")
+  // R25: red-team/test builds and outages (error) never use up the child's day
+  const r = db.prepare(`SELECT count(*) c FROM audit_requests WHERE child_id = ? AND created_at >= ?
+    AND source = 'child' AND outcome NOT IN ('closed', 'error')`)
     .get(childId, sinceIso) as { c: number };
   return r.c;
 }
 
 const CSV_COLS: (keyof AuditRequest)[] = [
   "id", "createdAt", "childId", "inputMode", "inputText", "layer1", "layer2", "layer3", "intent", "summary",
-  "builder", "checker", "outputText", "pictureCheck", "outcome", "errorDetail", "raw", "scene", "parentRequestId",
+  "builder", "checker", "outputText", "pictureCheck", "outcome", "errorDetail", "raw", "scene", "parentRequestId", "source", "baseScene",
 ];
 const cell = (v: unknown): string => {
   let s = v === null || v === undefined ? "" : typeof v === "object" ? JSON.stringify(v) : String(v);

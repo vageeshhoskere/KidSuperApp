@@ -22,6 +22,8 @@ export type BuildInput = {
   childId: number; mode: "typed" | "voice" | "pictures"; text: string; baseScene?: Scene; parentRequestId?: string;
   /** Set by code only (never parsed from a request): merged into this build's settings snapshot, never persisted. */
   settingsOverride?: Partial<ChildSettings>;
+  /** Set by code only (never parsed from a request): the red-team script and the parent Test build. Default "child". */
+  source?: AuditRequest["source"];
 };
 
 export const BUILDER_SYSTEM_PROMPT = [
@@ -76,12 +78,15 @@ const errText = (e: unknown) =>
   e instanceof ProviderError ? `${e.kind}: ${e.message}` : e instanceof Error ? e.message : String(e);
 const oops = (requestId?: string): BuildResult => ({ status: "error", requestId, message: COPY.oops });
 
-function newRow(d: Deps, childId: number, mode: AuditRequest["inputMode"], inputText: string, parent?: string): AuditRequest {
+function newRow(
+  d: Deps, childId: number, mode: AuditRequest["inputMode"], inputText: string, parent?: string,
+  source: AuditRequest["source"] = "child", baseScene: Scene | null = null,
+): AuditRequest {
   return {
     id: randomUUID(), createdAt: d.now().toISOString(), childId, inputMode: mode, inputText,
     layer1: NOT_RUN, layer2: NOT_RUN, layer3: NOT_RUN, intent: null, summary: null, builder: null, checker: null,
     outputText: null, pictureCheck: null, outcome: "error", errorDetail: null, raw: [], scene: null,
-    parentRequestId: parent ?? null,
+    parentRequestId: parent ?? null, source, baseScene,
   };
 }
 
@@ -249,7 +254,7 @@ export async function startBuild(d: Deps, i: BuildInput): Promise<BuildResult> {
   if (busy.has(i.childId)) return { status: "busy", message: COPY.busy };
   busy.add(i.childId);
   // the audit row only ever holds masked text
-  const row = newRow(d, i.childId, i.mode, findPii(text).masked, i.parentRequestId);
+  const row = newRow(d, i.childId, i.mode, findPii(text).masked, i.parentRequestId, i.source, i.baseScene ?? null);
   let res: BuildResult | undefined;
   try {
     res = await runStart(d, i, text, row);
@@ -289,7 +294,7 @@ const undecidedHeld = (d: Deps, id: string) => listHeld(d.db).find((r) => r.id =
 export async function approveHeld(d: Deps, heldId: string): Promise<BuildResult> {
   const held = undecidedHeld(d, heldId);
   if (!held) return oops();
-  const row = newRow(d, held.childId, held.inputMode, held.inputText, heldId);
+  const row = newRow(d, held.childId, held.inputMode, held.inputText, heldId, "child", held.baseScene);
   Object.assign(row, { layer1: held.layer1, layer2: held.layer2, layer3: held.layer3, intent: held.intent, summary: held.summary });
   try {
     d.audit.logEvent("hold_decision", { decision: "approve", newRequestId: row.id }, heldId);
@@ -299,7 +304,8 @@ export async function approveHeld(d: Deps, heldId: string): Promise<BuildResult>
     row.builder = g.builder;
     row.checker = g.checker ?? g.builder;
     return await buildAndShow(d, row, {
-      ...resolve(d, g, child.age, child.settings), text: held.inputText, pictureCheck: child.settings.pictureCheck,
+      ...resolve(d, g, child.age, child.settings), text: held.inputText, baseScene: held.baseScene ?? undefined,
+      pictureCheck: child.settings.pictureCheck,
       isNew: true, release: () => {},
     });
   } catch (e) {

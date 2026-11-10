@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { buildApp } from "./app";
-import { openDb } from "./db";
+import { openDb, restrictDataPerms } from "./db";
 import { purgeOlderThan } from "./audit";
 import { getGlobal } from "./settings";
 import { makeFakeProvider } from "./providers/fake";
@@ -32,6 +32,7 @@ if (refusal) {
   process.exit(1);
 }
 const db = openDb(path.join(dataDir, "app.db"));
+restrictDataPerms(dataDir);
 
 // Without an injected registry, buildApp builds it from keys.json and rebuilds it after every key change.
 // An injected registry (FAKE_PROVIDERS) is never rebuilt.

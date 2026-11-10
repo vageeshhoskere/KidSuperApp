@@ -27,7 +27,7 @@ afterEach(() => {
   __resetPipelineState();
 });
 
-function make(o: { verdicts?: string[] } = {}) {
+function make(o: { verdicts?: string[]; missing?: ProviderId[] } = {}) {
   const db: Db = openDb(":memory:");
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "app-test-"));
   const verdicts = [...(o.verdicts ?? [])];
@@ -38,6 +38,7 @@ function make(o: { verdicts?: string[] } = {}) {
   const checker = makeFakeProvider({ json: () => v(verdicts.shift() ?? "safe") });
   const builder = makeFakeProvider({ json: () => SCENE });
   const providers: Partial<Record<ProviderId, FakeProvider>> = { openai: mod, google: checker, anthropic: builder };
+  for (const id of o.missing ?? []) delete providers[id];
   const app = buildApp({ db, dataDir, registry: { get: (id) => providers[id] ?? null }, now: () => NOW });
   return { app, db, dataDir, builder, stt };
 }
@@ -394,5 +395,57 @@ describe("errors and static", () => {
       const r = await app.inject({ method: "GET", url });
       expect(r.statusCode, url).toBe(200);
     }
+  });
+});
+
+describe("final review fixes: guards", () => {
+  it("#1 PUT keys is refused with 409 while fake providers are active, and nothing is written", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "app-test-"));
+    const fake = makeFakeProvider({ json: () => SCENE, moderate: { violence: 0 } });
+    const app = buildApp({ db: openDb(":memory:"), dataDir, registry: { get: () => fake }, fakeProviders: true, now: () => NOW });
+    const { headers } = await setup(app);
+    const r = await put(app, headers, "/api/parent/keys/openai", { key: "sk-real-real-real-real-1234" }, 409);
+    expect(r.json()).toEqual({ error: "fake providers active" });
+    expect(fs.existsSync(path.join(dataDir, "keys.json"))).toBe(false);
+  });
+
+  it("#3 setupComplete needs a key for builder, checker and moderation providers", async () => {
+    const cases: [ProviderId, string][] = [["anthropic", "builder"], ["google", "checker"], ["openai", "moderation"]];
+    for (const [missing, role] of cases) {
+      const { app } = make({ missing: [missing] });
+      const { headers } = await setup(app, false);
+      await put(app, headers, "/api/parent/settings/global", {
+        builder: { provider: "anthropic", model: "b" }, checker: { provider: "google", model: "c" }, moderation: "openai",
+      }, 200);
+      const r = await put(app, headers, "/api/parent/settings/global", { setupComplete: true }, 400);
+      expect(r.json().error).toBe(`no API key for ${missing} (${role})`);
+    }
+  });
+
+  it("#3 the checker falls back to the builder's provider; moderation off needs no key", async () => {
+    const { app } = make({ missing: ["google", "openai"] });
+    const { headers } = await setup(app, false);
+    await put(app, headers, "/api/parent/settings/global", {
+      builder: { provider: "anthropic", model: "b" }, moderation: "off", moderationOffAcknowledged: true, setupComplete: true,
+    }, 200);
+    // a later change to a provider without a key is refused while setup is complete
+    const r = await put(app, headers, "/api/parent/settings/global", { checker: { provider: "google", model: "c" } }, 400);
+    expect(r.json().error).toBe("no API key for google (checker)");
+  });
+
+  it("#2 HTTP never accepts source or settingsOverride", async () => {
+    const { app, builder } = make();
+    await setup(app);
+    expect((await build(app, { mode: "typed", text: "a red tower", source: "redteam" })).statusCode).toBe(400);
+    expect((await build(app, { mode: "typed", text: "a red tower", settingsOverride: {} })).statusCode).toBe(400);
+    expect(builder.calls.generateJson).toBe(0);
+  });
+
+  it("child creation is audited as child_created (setup and POST children)", async () => {
+    const { app } = make();
+    const { headers, childId } = await setup(app);
+    const r = await app.inject({ method: "POST", url: "/api/parent/children", headers, payload: { name: "Kim", avatar: "cat", age: 6 } });
+    const ev = (await app.inject({ method: "GET", url: "/api/parent/events?type=child_created", headers })).json();
+    expect(ev.map((e: { detail: unknown }) => e.detail)).toEqual([{ childId, name: "Sam" }, { childId: r.json().id, name: "Kim" }]);
   });
 });
