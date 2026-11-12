@@ -1,0 +1,25 @@
+{
+  "synthetic": true,
+  "note": "Built from the provider's documented response shape; no API keys available (ruling R7).",
+  "request": {
+    "method": "GET",
+    "url": "https://generativelanguage.googleapis.com/v1/models"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "models": [
+        {
+          "name": "models/gemini-test",
+          "displayName": "Gemini Test",
+          "supportedGenerationMethods": [
+            "generateContent"
+          ]
+        }
+      ]
+    }
+  }
+}

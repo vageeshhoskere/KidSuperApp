@@ -1,0 +1,36 @@
+{
+  "synthetic": true,
+  "note": "Built from the provider's documented response shape; no API keys available (ruling R7).",
+  "request": {
+    "method": "POST",
+    "url": "https://language.googleapis.com/v2/documents:moderateText"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "moderationCategories": [
+        {
+          "name": "Toxic",
+          "confidence": 0.012
+        },
+        {
+          "name": "Insult",
+          "confidence": 0.004
+        },
+        {
+          "name": "Violent",
+          "confidence": 0.03
+        },
+        {
+          "name": "Sexual",
+          "confidence": 0.001
+        }
+      ],
+      "languageCode": "en",
+      "languageSupported": true
+    }
+  }
+}
